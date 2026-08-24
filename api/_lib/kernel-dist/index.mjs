@@ -14212,7 +14212,12 @@ function runGasHeat(raw) {
     const hasPhysical = violations.some((v) => v.id !== void 0 && PHYSICAL_VIOLATIONS4.has(v.id));
     const served = hasPhysical ? [] : answers;
     const ok = violations.length === 0 && errors.length === 0 && served.length === plan.queries.length && served.every((a) => Number.isFinite(a.approx));
-    return { ok, answers: served, checks, violations, errors, geometry: null, meta: { atmInPa: plan.atmInPa, unitsNote: "SI", knowledgeTags: plan.knowledgeTags } };
+    const pvStates = [];
+    for (const st of ent.states.values()) {
+      if (st.p && st.V && Number.isFinite(st.p.n) && Number.isFinite(st.V.n)) pvStates.push({ name: st.name, p: st.p.n, V: st.V.n });
+    }
+    const pv = pvStates.length >= 1 ? { unitP: "Pa", unitV: "m3", process: ent.process?.kind ?? null, states: pvStates } : null;
+    return { ok, answers: served, checks, violations, errors, geometry: null, pv, meta: { atmInPa: plan.atmInPa, unitsNote: "SI", knowledgeTags: plan.knowledgeTags } };
   } catch (e) {
     return fail3([`L\u1ED7i engine b\u1EA5t ng\u1EDD: ${e.message}`], plan.atmInPa, plan.knowledgeTags);
   }
