@@ -12110,6 +12110,18 @@ function buildWaveScene(problemName, base, waves, sounds, tPhys, durationSec) {
           params: { equations: { x: num92(xj), y: "0", z: cosExpr2(A, wn * k, phaStatic) }, path: `phan tu song ${m.name}`, landing_point: [xj, 0, zLand], timeScale: k }
         });
       }
+    } else if (m.spaceK !== null && m.lambda !== null && Number.isFinite(m.lambda.approx) && m.lambda.approx > 0) {
+      const lam = m.lambda.approx, spK = approxP(m.spaceK), phin = m.phi ? approxP(m.phi) : 0;
+      const Anom = lam / 4;
+      const samples = [];
+      for (let i = 0; i <= 64; i++) {
+        const x = 2 * lam * i / 64;
+        samples.push({ x: rnd3(x), y: rnd3(Anom * Math.cos(-m.dir * spK * x + phin)) });
+      }
+      points.push({ id: `O_${m.name}`, label: "", x: 0, y: 0, z: 0 });
+      points.push({ id: `E_${m.name}`, label: "", x: rnd3(2 * lam), y: 0, z: 0 });
+      lines.push({ id: `truc_${m.name}`, from: `O_${m.name}`, to: `E_${m.name}`, style: "solid", color: "#8B8B8B" });
+      curves.push({ id: `waveform_nom_${m.name}`, type: "expr", plane: "xz", style: "solid", color, params: {}, samples });
     } else {
       const span = m.lambda && Number.isFinite(m.lambda.approx) ? Math.max(1, 2 * m.lambda.approx) : 1;
       points.push({ id: `O_${m.name}`, label: "", x: 0, y: 0, z: 0 });
@@ -12875,7 +12887,11 @@ function runEfield(raw) {
     if (delta > tol) violations.push({ assert: a.query.kind, expected: a.equals, got: r2.answer.approx, delta });
   }
   const ok = violations.length === 0 && errors.length === 0 && answers.length === plan.queries.length && answers.every((a) => Number.isFinite(a.approx));
-  return { ok, answers, checks, violations, errors, geometry: null, meta };
+  const rawPos = new Map(plan.ops.filter((o) => o.op === "point_charge").map((o) => [o.name, o.at]));
+  const charges = [...ent.points.values()].map((p2) => ({ name: p2.name, q: p2.qN, x: rawPos.get(p2.name)?.[0] ?? 0, y: rawPos.get(p2.name)?.[1] ?? 0 }));
+  const fieldPoints = plan.queries.filter((q2) => q2.kind === "field_at").map((q2) => ({ x: q2.at[0], y: q2.at[1], label: q2.label }));
+  const diagram = charges.length > 0 ? { unitLen: plan.units.length, charges, fieldPoints } : null;
+  return { ok, answers, checks, violations, errors, geometry: null, diagram, meta };
 }
 
 // api/_lib/kernel/physics/acSchema.ts
