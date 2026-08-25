@@ -10334,27 +10334,42 @@ function computeDynQuery(solved, query, isSingle) {
 var COLORS2 = ["#FFA500", "#38BDF8", "#F472B6", "#4ADE80"];
 var fmt2 = (n) => parseFloat(n.toFixed(6)).toString();
 var rnd = (n) => parseFloat(n.toFixed(6));
+var norm360 = (d) => (d % 360 + 360) % 360;
 function buildFbd(plan, solved) {
   const bodies = [];
   for (const op of plan.ops) {
     if (op.op !== "body") continue;
     const b = solved.bodies.get(op.name);
-    if (!b || b.config !== "ngang") continue;
+    if (!b) continue;
+    const onIncline = b.config === "nghieng";
+    const th = onIncline ? b.theta ?? 0 : 0;
+    const hasTension = b.tensionN != null && b.tensionN > 1e-9;
     const forces = [];
     if (b.weightN != null && b.weightN > 1e-9) forces.push({ label: "P", kind: "weight", mag: b.weightN, dirDeg: 270 });
-    if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: 90 });
+    if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: onIncline ? norm360(90 + th) : 90 });
+    if (hasTension) {
+      const dir = b.config === "hanging" ? 90 : onIncline ? norm360(th) : 0;
+      forces.push({ label: "T", kind: "tension", mag: b.tensionN, dirDeg: dir });
+    }
     for (const f of plan.ops) {
       if (f.op !== "force" || f.on !== op.name) continue;
       const fN = f.unit === "kN" ? f.value * 1e3 : f.value;
-      const base = f.direction === "backward" ? 180 : 0;
-      const dir = f.direction === "backward" ? base - (f.angleDeg ?? 0) : base + (f.angleDeg ?? 0);
-      forces.push({ label: "F", kind: "applied", mag: fN, dirDeg: (dir % 360 + 360) % 360 });
+      const dir = onIncline ? norm360(f.direction === "backward" ? 180 + th : th) : norm360((f.direction === "backward" ? 180 : 0) + (f.direction === "backward" ? -1 : 1) * (f.angleDeg ?? 0));
+      forces.push({ label: "F", kind: "applied", mag: fN, dirDeg: dir });
     }
     if (b.frictionN != null && b.frictionN > 1e-9) {
-      const moveRight = (b.aN ?? 0) >= 0;
-      forces.push({ label: "Fms", kind: "friction", mag: b.frictionN, dirDeg: moveRight ? 180 : 0 });
+      let dir;
+      if (onIncline) {
+        dir = b.motionDesc === "len-doc" ? norm360(180 + th) : norm360(th);
+      } else if (hasTension) {
+        dir = 180;
+      } else {
+        const movingRight = b.v0N > 1e-9 ? true : b.v0N < -1e-9 ? false : (b.aN ?? 0) >= 0;
+        dir = movingRight ? 180 : 0;
+      }
+      forces.push({ label: "Fms", kind: "friction", mag: b.frictionN, dirDeg: dir });
     }
-    bodies.push({ name: op.name, config: b.config, mass: b.mN ?? null, aN: b.aN ?? null, forces });
+    if (forces.length) bodies.push({ name: op.name, config: b.config, mass: b.mN ?? null, aN: b.aN ?? null, theta: onIncline ? th : null, forces });
   }
   return bodies.length ? { bodies } : null;
 }
