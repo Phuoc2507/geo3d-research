@@ -10334,6 +10334,30 @@ function computeDynQuery(solved, query, isSingle) {
 var COLORS2 = ["#FFA500", "#38BDF8", "#F472B6", "#4ADE80"];
 var fmt2 = (n) => parseFloat(n.toFixed(6)).toString();
 var rnd = (n) => parseFloat(n.toFixed(6));
+function buildFbd(plan, solved) {
+  const bodies = [];
+  for (const op of plan.ops) {
+    if (op.op !== "body") continue;
+    const b = solved.bodies.get(op.name);
+    if (!b || b.config !== "ngang") continue;
+    const forces = [];
+    if (b.weightN != null && b.weightN > 1e-9) forces.push({ label: "P", kind: "weight", mag: b.weightN, dirDeg: 270 });
+    if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: 90 });
+    for (const f of plan.ops) {
+      if (f.op !== "force" || f.on !== op.name) continue;
+      const fN = f.unit === "kN" ? f.value * 1e3 : f.value;
+      const base = f.direction === "backward" ? 180 : 0;
+      const dir = f.direction === "backward" ? base - (f.angleDeg ?? 0) : base + (f.angleDeg ?? 0);
+      forces.push({ label: "F", kind: "applied", mag: fN, dirDeg: (dir % 360 + 360) % 360 });
+    }
+    if (b.frictionN != null && b.frictionN > 1e-9) {
+      const moveRight = (b.aN ?? 0) >= 0;
+      forces.push({ label: "Fms", kind: "friction", mag: b.frictionN, dirDeg: moveRight ? 180 : 0 });
+    }
+    bodies.push({ name: op.name, config: b.config, mass: b.mN ?? null, aN: b.aN ?? null, forces });
+  }
+  return bodies.length ? { bodies } : null;
+}
 function playbackOf2(plan, tPhys) {
   if (plan.scene.durationSec) return { durationSec: plan.scene.durationSec, timeScale: tPhys / plan.scene.durationSec };
   if (tPhys >= 3 && tPhys <= 15) return { durationSec: tPhys, timeScale: 1 };
@@ -10506,7 +10530,7 @@ function runDynamics(raw) {
   if (!parsed.success) {
     const iss = parsed.error.issues[0];
     const detail = iss ? `${iss.path.length ? `${iss.path.join(".")}: ` : ""}${iss.message}` : "schema";
-    return { ok: false, answers: [], checks: [], violations: [], errors: [{ message: `Invalid dynamics plan: ${detail}` }], geometry: null, charts: [], meta: ZERO_META2 };
+    return { ok: false, answers: [], checks: [], violations: [], errors: [{ message: `Invalid dynamics plan: ${detail}` }], geometry: null, charts: [], fbd: null, meta: ZERO_META2 };
   }
   const plan = parsed.data;
   const isSingle = plan.ops.filter((o) => o.op === "body").length === 1;
@@ -10548,6 +10572,7 @@ function runDynamics(raw) {
   const okState = violations.length === 0 && errors.length === 0;
   const scene = okState ? buildDynamicsScene(plan, solved, tPhys) : { geometry: null, playback: { durationSec: 0, timeScale: 1 } };
   const charts = okState ? buildDynamicsCharts(plan, solved, tPhys) : [];
+  const fbd = okState ? buildFbd(plan, solved) : null;
   const ok = violations.length === 0 && errors.length === 0 && servedAnswers.length === plan.queries.length && servedAnswers.every((a) => Number.isFinite(a.approx));
   return {
     ok,
@@ -10557,6 +10582,7 @@ function runDynamics(raw) {
     errors,
     geometry: scene.geometry,
     charts,
+    fbd,
     meta: { model: { config: solved.meta.config, direction: solved.meta.direction }, tPhys, playback: scene.playback, unitsNote: "SI", horizonNote: solved.meta.horizonNote }
   };
 }
