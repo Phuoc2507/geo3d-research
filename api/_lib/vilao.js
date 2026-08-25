@@ -1,7 +1,11 @@
 import https from 'https';
 
-const VILAO_BASE_URL = 'https://api.vilao.ai';
-const VILAO_MODEL = 'ram/gemini-3.5-flash-low';
+// Địa chỉ nhà cung cấp AI — lấy từ env để đổi được KHÔNG cần sửa code + build + deploy
+// giữa lúc sự cố (Vilao chập, đổi giá, hay cần trỏ sang endpoint tương thích OpenAI khác).
+// Bỏ dấu '/' thừa ở cuối để ghép '/v1/...' không sinh URL '//v1'.
+const VILAO_BASE_URL = (process.env.VILAO_BASE_URL || 'https://api.vilao.ai').replace(/\/+$/, '');
+// Model mặc định — cũng cho đổi qua env để thử model khác mà không đụng code.
+const VILAO_MODEL = process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low';
 
 function httpsRequest(url, options, bodyData, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -78,7 +82,6 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     maxTokens = 4096,
     timeoutMs = 180000,
     imageBase64 = null,
-    aiModel = 'low',
     useReasoning = false,
     onStream = null,
     model = null,
@@ -88,19 +91,11 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
   } = options;
 
-  let modelToUse = VILAO_MODEL;
-  if (aiModel === 'high') {
-    modelToUse = 'ram/gemini-3.5-flash-low';
-  }
-
-  if (useReasoning) {
-    modelToUse = 'ram/gemini-3.5-flash-low';
-  }
-
-  // Cho phép chỉ định model tường minh (dùng cho kernel-mode Translator) — ưu tiên cao nhất.
-  if (model) {
-    modelToUse = model;
-  }
+  // Trước đây có nhánh chọn model theo `aiModel` ('high') và `useReasoning`, nhưng cả hai
+  // đều trỏ về ĐÚNG một model nên là nhánh chết (gợi ý một năng lực không có thật). Đã gỡ.
+  // Chỉ còn override tường minh qua `model` — dùng cho kernel-mode Translator.
+  // (`aiModel` không còn được đọc; caller cứ truyền cũng vô hại vì là thuộc tính object.)
+  const modelToUse = model || VILAO_MODEL;
 
   const currentApiKey = resolveApiKey({ apiKey }, process.env.VILAO_API_KEY);
 
