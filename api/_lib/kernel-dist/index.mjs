@@ -9698,7 +9698,12 @@ var BodyOp = external_exports.object({
   massUnit: external_exports.enum(["kg", "g", "tan"]).default("kg"),
   on: external_exports.enum(["horizontal", "incline", "hanging"]).default("horizontal"),
   inclineDeg: Num3.optional(),
-  // BẮT BUỘC khi on='incline' (superRefine), 0 < θ < 90
+  // on='incline': KHAI góc (0<θ<90) HOẶC cặp cao/dài dưới (superRefine)
+  // Cách khai mặt nghiêng thứ 2 (đề cho CAO & DÀI, không cho góc): engine suy sinθ = cao/dài EXACT.
+  inclineHeight: Num3.positive().optional(),
+  // chiều cao dốc (h) — đi CẶP với inclineLength
+  inclineLength: Num3.positive().optional(),
+  // chiều dài mặt dốc (l, cạnh huyền) — phải > inclineHeight
   mu: Num3.min(0).optional(),
   // hệ số ma sát trượt; bỏ trống = nhẵn. Lớp 10: cũng là ma sát nghỉ cực đại.
   motion: external_exports.enum(["down", "up"]).optional(),
@@ -9736,6 +9741,9 @@ var DynamicsQuerySchema = external_exports.discriminatedUnion("kind", [
   }),
   external_exports.object({ kind: external_exports.literal("normal_force"), on: Obj2, label: external_exports.string().optional() }),
   // N (độ lớn)
+  // Lực (dọc dốc) cần để kéo vật LÊN mặt nghiêng ĐỀU: F = mg·sinθ (nhẵn) hoặc mg·sinθ + μmg·cosθ (có ma
+  // sát). Dạng "mặt phẳng nghiêng như máy cơ" — đề CHO cao/dài hoặc góc; engine tính (KHÔNG cần khai op force).
+  external_exports.object({ kind: external_exports.literal("force_to_move"), on: Obj2, label: external_exports.string().optional() }),
   // F_min để vật BẮT ĐẦU trượt trên mặt ngang (μ nghỉ = mu). KHÔNG khai op force (giá trị là ẩn số).
   // DY-1 (§17.3): v1 CHỈ nhận α = 0 — SCHEMA CHẶN bằng z.literal(0); α ≠ 0 fail parse với lỗi tiếng Việt.
   external_exports.object({
@@ -9785,11 +9793,17 @@ var DynamicsPlanSchema = external_exports.object({
     seen.add(b.name);
   }
   for (const b of bodies) {
+    const hasHL = b.inclineHeight !== void 0 || b.inclineLength !== void 0;
     if (b.on === "incline") {
-      if (b.inclineDeg === void 0) issue(`v\u1EADt "${b.name}" tr\xEAn m\u1EB7t nghi\xEAng thi\u1EBFu inclineDeg`);
-      else if (!(b.inclineDeg > 0 && b.inclineDeg < 90)) issue(`inclineDeg c\u1EE7a "${b.name}" ph\u1EA3i trong kho\u1EA3ng (0, 90), nh\u1EADn ${b.inclineDeg}`);
-    } else if (b.inclineDeg !== void 0) {
-      issue(`inclineDeg ch\u1EC9 h\u1EE3p l\u1EC7 v\u1EDBi on='incline' (v\u1EADt "${b.name}")`);
+      const hasDeg = b.inclineDeg !== void 0;
+      const hasBothHL = b.inclineHeight !== void 0 && b.inclineLength !== void 0;
+      if (!hasDeg && !hasBothHL) issue(`v\u1EADt "${b.name}" tr\xEAn m\u1EB7t nghi\xEAng c\u1EA7n inclineDeg HO\u1EB6C (inclineHeight & inclineLength)`);
+      if (hasDeg && !(b.inclineDeg > 0 && b.inclineDeg < 90)) issue(`inclineDeg c\u1EE7a "${b.name}" ph\u1EA3i trong kho\u1EA3ng (0, 90), nh\u1EADn ${b.inclineDeg}`);
+      if (hasHL && !hasBothHL) issue(`v\u1EADt "${b.name}": c\u1EA7n C\u1EA2 inclineHeight v\xE0 inclineLength (m\u1EDBi suy \u0111\u01B0\u1EE3c g\xF3c d\u1ED1c)`);
+      if (hasBothHL && !(b.inclineHeight < b.inclineLength)) issue(`chi\u1EC1u cao d\u1ED1c ph\u1EA3i NH\u1ECE H\u01A0N chi\u1EC1u d\xE0i d\u1ED1c (v\u1EADt "${b.name}")`);
+    } else {
+      if (b.inclineDeg !== void 0) issue(`inclineDeg ch\u1EC9 h\u1EE3p l\u1EC7 v\u1EDBi on='incline' (v\u1EADt "${b.name}")`);
+      if (hasHL) issue(`inclineHeight/inclineLength ch\u1EC9 h\u1EE3p l\u1EC7 v\u1EDBi on='incline' (v\u1EADt "${b.name}")`);
     }
     if (b.motion !== void 0 && b.on !== "incline") issue(`motion ch\u1EC9 h\u1EE3p l\u1EC7 v\u1EDBi on='incline' (v\u1EADt "${b.name}")`);
     if (b.mu !== void 0 && b.on === "hanging") issue(`v\u1EADt treo "${b.name}" kh\xF4ng \u0111\u01B0\u1EE3c khai mu (kh\xF4ng c\xF3 m\u1EB7t t\u1EF1a)`);
@@ -9874,6 +9888,20 @@ function resCheck2(kind, detail, resid, scaleN) {
   const pass = e !== null ? e.num === 0n : Math.abs(resid.approx) <= EPS_SELF3 * Math.max(1, scaleN);
   return { kind, detail, residual, pass };
 }
+function inclineTrig(body) {
+  if (body.inclineHeight !== void 0 && body.inclineLength !== void 0) {
+    const h = body.inclineHeight, l = body.inclineLength;
+    const sin2 = div(scalarFromNumber(h), scalarFromNumber(l));
+    const cos2 = sqrt(div(scalarFromNumber(l * l - h * h), scalarFromNumber(l * l)));
+    const sinN = h / l;
+    const cosN = Math.sqrt(Math.max(0, l * l - h * h)) / l;
+    const theta2 = Math.asin(Math.min(1, Math.max(0, sinN))) * 180 / Math.PI;
+    return { theta: theta2, sin: sin2, cos: cos2, sinN, cosN };
+  }
+  const theta = body.inclineDeg;
+  const { cos, sin } = trigOf(theta);
+  return { theta, sin, cos, sinN: Math.sin(theta * Math.PI / 180), cosN: Math.cos(theta * Math.PI / 180) };
+}
 function solveSingle(body, forcesOn, gS, gN, needsMotion, checks, violations) {
   const reqG = () => {
     if (gS === void 0 || gN === void 0) throw new Error('c\u1EA7n g (gia t\u1ED1c tr\u1ECDng tr\u01B0\u1EDDng) cho m\xF4 h\xECnh n\xE0y \u2014 b\u1ED5 sung "g" v\xE0o plan');
@@ -9952,13 +9980,12 @@ function solveSingle(body, forcesOn, gS, gN, needsMotion, checks, violations) {
       st.blockReason = e.message;
     }
   } else if (st.config === "nghieng") {
-    const theta = body.inclineDeg;
-    const { cos, sin } = trigOf(theta);
+    const { theta, sin, cos, sinN, cosN } = inclineTrig(body);
     st.theta = theta;
     st.sinT = sin;
     st.cosT = cos;
-    st.sinTN = Math.sin(theta * Math.PI / 180);
-    st.cosTN = Math.cos(theta * Math.PI / 180);
+    st.sinTN = sinN;
+    st.cosTN = cosN;
     const down = (body.motion ?? "down") === "down";
     if (mass && gS !== void 0 && gN !== void 0) {
       st.N = mul(mul(mass.s, gS), cos);
@@ -10144,7 +10171,7 @@ function solveDynamics(plan) {
     } else {
       const b = bodies[0];
       const isSingle = true;
-      const needsMotion = b.on === "incline" || b.v0 > 0 || forces.some((f) => f.on === b.name) || bodyNeedsMotion(b.name, isSingle, plan);
+      const needsMotion = b.v0 > 0 || forces.some((f) => f.on === b.name) || bodyNeedsMotion(b.name, isSingle, plan);
       const st = solveSingle(b, forces.filter((f) => f.on === b.name), gS, gN, needsMotion, checks, violations);
       bodyMap.set(b.name, st);
       meta.config = st.config === "nghieng" ? "nghieng" : "ngang";
@@ -10236,6 +10263,22 @@ function computeDynQuery(solved, query, isSingle) {
         const fminN = b.muN * m.n * solved.gN;
         const chk = [{ kind: "static_threshold", detail: `F_min = \u03BCmg = ${fminN.toFixed(2)} N (ng\u01B0\u1EE1ng b\u1EAFt \u0111\u1EA7u tr\u01B0\u1EE3t, \u03B1 = 0)`, residual: 0, pass: true }];
         return { ok: true, answer: mkAns2("min_force_to_move", fmin, fminN, "N", query.label), checks: chk };
+      }
+      case "force_to_move": {
+        const b = bodyByName(query.on);
+        if (b.config !== "nghieng") return { ok: false, problem: `force_to_move v1 ch\u1EC9 cho m\u1EB7t ph\u1EB3ng nghi\xEAng (v\u1EADt "${b.name}")` };
+        if (b.sinT === void 0 || b.sinTN === void 0) return { ok: false, problem: `ch\u01B0a l\u1EADp \u0111\u01B0\u1EE3c g\xF3c nghi\xEAng c\u1EE7a "${b.name}"` };
+        const g = reqG();
+        const m = reqMass(b);
+        const mgSin = mul(mul(m.s, g.s), b.sinT);
+        let F = mgSin;
+        let FN = m.n * g.n * b.sinTN;
+        if (b.hasMu && b.cosT !== void 0 && b.cosTN !== void 0) {
+          F = add2(F, mul(b.mu, mul(mul(m.s, g.s), b.cosT)));
+          FN += b.muN * m.n * g.n * b.cosTN;
+        }
+        const chk = [{ kind: "incline_pull", detail: `F k\xE9o \u0111\u1EC1u l\xEAn d\u1ED1c = mg\xB7sin\u03B8${b.hasMu ? " + \u03BCmg\xB7cos\u03B8" : ""} = ${FN.toFixed(2)} N`, residual: 0, pass: true }];
+        return { ok: true, answer: mkAns2("force_to_move", F, FN, "N", query.label), checks: chk };
       }
       case "velocity_at": {
         const b = bodyByName(query.of);
