@@ -10334,6 +10334,49 @@ function computeDynQuery(solved, query, isSingle) {
 var COLORS2 = ["#FFA500", "#38BDF8", "#F472B6", "#4ADE80"];
 var fmt2 = (n) => parseFloat(n.toFixed(6)).toString();
 var rnd = (n) => parseFloat(n.toFixed(6));
+var norm360 = (d) => (d % 360 + 360) % 360;
+function buildFbd(plan, solved) {
+  const bodies = [];
+  for (const op of plan.ops) {
+    if (op.op !== "body") continue;
+    const b = solved.bodies.get(op.name);
+    if (!b) continue;
+    const onIncline = b.config === "nghieng";
+    const th = onIncline ? b.theta ?? 0 : 0;
+    const hasTension = b.tensionN != null && b.tensionN > 1e-9;
+    const forces = [];
+    if (b.weightN != null && b.weightN > 1e-9) forces.push({ label: "P", kind: "weight", mag: b.weightN, dirDeg: 270 });
+    if (onIncline && b.weightN != null && b.weightN > 1e-9 && b.sinTN != null && b.cosTN != null) {
+      forces.push({ label: "Px", kind: "weight", mag: b.weightN * b.sinTN, dirDeg: norm360(180 + th), component: true });
+      forces.push({ label: "Py", kind: "weight", mag: b.weightN * b.cosTN, dirDeg: norm360(270 + th), component: true });
+    }
+    if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: onIncline ? norm360(90 + th) : 90 });
+    if (hasTension) {
+      const dir = b.config === "hanging" ? 90 : onIncline ? norm360(th) : 0;
+      forces.push({ label: "T", kind: "tension", mag: b.tensionN, dirDeg: dir });
+    }
+    for (const f of plan.ops) {
+      if (f.op !== "force" || f.on !== op.name) continue;
+      const fN = f.unit === "kN" ? f.value * 1e3 : f.value;
+      const dir = onIncline ? norm360(f.direction === "backward" ? 180 + th : th) : norm360((f.direction === "backward" ? 180 : 0) + (f.direction === "backward" ? -1 : 1) * (f.angleDeg ?? 0));
+      forces.push({ label: "F", kind: "applied", mag: fN, dirDeg: dir });
+    }
+    if (b.frictionN != null && b.frictionN > 1e-9) {
+      let dir;
+      if (onIncline) {
+        dir = b.motionDesc === "len-doc" ? norm360(180 + th) : norm360(th);
+      } else if (hasTension) {
+        dir = 180;
+      } else {
+        const movingRight = b.v0N > 1e-9 ? true : b.v0N < -1e-9 ? false : (b.aN ?? 0) >= 0;
+        dir = movingRight ? 180 : 0;
+      }
+      forces.push({ label: "Fms", kind: "friction", mag: b.frictionN, dirDeg: dir });
+    }
+    if (forces.length) bodies.push({ name: op.name, config: b.config, mass: b.mN ?? null, aN: b.aN ?? null, theta: onIncline ? th : null, forces });
+  }
+  return bodies.length ? { bodies } : null;
+}
 function playbackOf2(plan, tPhys) {
   if (plan.scene.durationSec) return { durationSec: plan.scene.durationSec, timeScale: tPhys / plan.scene.durationSec };
   if (tPhys >= 3 && tPhys <= 15) return { durationSec: tPhys, timeScale: 1 };
@@ -10506,7 +10549,7 @@ function runDynamics(raw) {
   if (!parsed.success) {
     const iss = parsed.error.issues[0];
     const detail = iss ? `${iss.path.length ? `${iss.path.join(".")}: ` : ""}${iss.message}` : "schema";
-    return { ok: false, answers: [], checks: [], violations: [], errors: [{ message: `Invalid dynamics plan: ${detail}` }], geometry: null, charts: [], meta: ZERO_META2 };
+    return { ok: false, answers: [], checks: [], violations: [], errors: [{ message: `Invalid dynamics plan: ${detail}` }], geometry: null, charts: [], fbd: null, meta: ZERO_META2 };
   }
   const plan = parsed.data;
   const isSingle = plan.ops.filter((o) => o.op === "body").length === 1;
@@ -10548,6 +10591,7 @@ function runDynamics(raw) {
   const okState = violations.length === 0 && errors.length === 0;
   const scene = okState ? buildDynamicsScene(plan, solved, tPhys) : { geometry: null, playback: { durationSec: 0, timeScale: 1 } };
   const charts = okState ? buildDynamicsCharts(plan, solved, tPhys) : [];
+  const fbd = okState ? buildFbd(plan, solved) : null;
   const ok = violations.length === 0 && errors.length === 0 && servedAnswers.length === plan.queries.length && servedAnswers.every((a) => Number.isFinite(a.approx));
   return {
     ok,
@@ -10557,6 +10601,7 @@ function runDynamics(raw) {
     errors,
     geometry: scene.geometry,
     charts,
+    fbd,
     meta: { model: { config: solved.meta.config, direction: solved.meta.direction }, tPhys, playback: scene.playback, unitsNote: "SI", horizonNote: solved.meta.horizonNote }
   };
 }
