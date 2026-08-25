@@ -10346,6 +10346,10 @@ function buildFbd(plan, solved) {
     const hasTension = b.tensionN != null && b.tensionN > 1e-9;
     const forces = [];
     if (b.weightN != null && b.weightN > 1e-9) forces.push({ label: "P", kind: "weight", mag: b.weightN, dirDeg: 270 });
+    if (onIncline && b.weightN != null && b.weightN > 1e-9 && b.sinTN != null && b.cosTN != null) {
+      forces.push({ label: "Px", kind: "weight", mag: b.weightN * b.sinTN, dirDeg: norm360(180 + th), component: true });
+      forces.push({ label: "Py", kind: "weight", mag: b.weightN * b.cosTN, dirDeg: norm360(270 + th), component: true });
+    }
     if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: onIncline ? norm360(90 + th) : 90 });
     if (hasTension) {
       const dir = b.config === "hanging" ? 90 : onIncline ? norm360(th) : 0;
