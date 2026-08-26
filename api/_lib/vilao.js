@@ -29,10 +29,11 @@ const PROVIDERS = {
   },
 };
 
-// Provider ĐANG hoạt động (mặc định 'gemini'). Giá trị lạ ⇒ về gemini để không rơi im lặng về Vilao.
+// Provider ĐANG hoạt động (mặc định 'vilao'). Giá trị lạ ⇒ về vilao. Đặt LLM_PROVIDER=gemini để bật
+// Gemini chính hãng (code đã sẵn, chỉ đổi biến này).
 export function activeProvider() {
-  const key = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
-  return PROVIDERS[key] || PROVIDERS.gemini;
+  const key = (process.env.LLM_PROVIDER || 'vilao').toLowerCase();
+  return PROVIDERS[key] || PROVIDERS.vilao;
 }
 
 // Giữ để tương thích: đường "khoá tường minh" (test key Vilao, override advance) vẫn dùng model nền Vilao.
@@ -144,7 +145,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     chatUrl = prov.chatUrl;
     currentApiKey = process.env[prov.apiKeyEnv];
     if (!currentApiKey) {
-      throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'gemini'}' (đặt ${prov.apiKeyEnv})`);
+      throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
     }
     modelToUse = imageBase64 ? prov.visionModel : prov.textModel;
   }
