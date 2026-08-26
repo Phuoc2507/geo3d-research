@@ -15,8 +15,11 @@ const PROVIDERS = {
     // Flash-Lite: rẻ nhất + gần như không "thinking" ⇒ nhanh (bản Flash đầy đủ bật suy luận nên hay
     // timeout với tác vụ xuất JSON dài). Alias '-latest' tự trỏ bản Lite GA hiện hành. Đổi qua
     // gemini-flash-latest nếu cần Flash "xịn" hơn (đắt + chậm hơn).
-    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-lite-latest',
-    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-lite-latest',
+    // gemini-flash-latest = bản Flash đầy đủ hiện hành (đang là 3.7 Flash, $0.75/$3.75) — chất lượng
+    // tốt hơn Flash-Lite. Flash bật "thinking" động nên chậm ⇒ ta GIỚI HẠN suy luận bằng
+    // GEMINI_REASONING_EFFORT (mặc định 'low') ở phần dựng request bên dưới ⇒ nhanh mà vẫn tốt.
+    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-latest',
+    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-latest',
   },
   vilao: {
     chatUrl:  'https://api.vilao.ai/v1/chat/completions',
@@ -177,6 +180,15 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   // useReasoning ở đây chỉ đổi cờ này chứ không đổi model, nên bật lại an toàn.
   if ((!useReasoning || imageBase64) && modelToUse !== 'ox/o1-mini') {
     bodyObj.response_format = { type: 'json_object' };
+  }
+
+  // GIỚI HẠN suy luận cho Gemini: Flash bật "thinking" động (ngốn tới ~24K token nghĩ ⇒ chậm/timeout).
+  // reasoning_effort: 'low'~1K, 'medium'~8K, 'high'~24K, 'none' tắt hẳn. Mặc định 'low' cho nhanh mà vẫn
+  // đủ suy luận cho hình học; đổi qua GEMINI_REASONING_EFFORT ('none' rẻ/nhanh nhất, 'high' kỹ hơn).
+  // CHỈ áp cho endpoint Gemini — provider khác (Vilao) không hiểu tham số này. 'default' = để model tự quyết.
+  const geminiEffort = (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
+  if (chatUrl.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
+    bodyObj.reasoning_effort = geminiEffort;
   }
 
   let attempt = 0;
