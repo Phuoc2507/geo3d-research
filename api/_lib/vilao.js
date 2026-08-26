@@ -1,7 +1,34 @@
 import https from 'https';
 
-const VILAO_BASE_URL = 'https://api.vilao.ai';
-const VILAO_MODEL = 'ram/gemini-3.5-flash-low';
+// ── Provider registry ───────────────────────────────────────────────────────
+// Cả tầng LLM dùng chung format OpenAI (/chat/completions). Đổi provider CHÍNH chỉ bằng MỘT biến môi
+// trường LLM_PROVIDER (không phải sửa code): 'gemini' = Google chính hãng (mặc định) hoặc 'vilao' = dự
+// phòng. Mỗi provider tự khai endpoint + biến chứa API key + tên model (chữ / ảnh), override được qua env.
+//   • Gemini: endpoint OpenAI-compat — nuốt response_format json_object + image_url data-URL + Bearer auth,
+//     nên payload hiện tại chạy nguyên si. (Lưu ý: prompt-caching KHÔNG có trên shim này, chỉ có ở SDK gốc.)
+const PROVIDERS = {
+  gemini: {
+    chatUrl:  'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    textModel:   process.env.GEMINI_MODEL        || 'gemini-2.5-flash',
+    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  },
+  vilao: {
+    chatUrl:  'https://api.vilao.ai/v1/chat/completions',
+    apiKeyEnv: 'VILAO_API_KEY',
+    textModel:   process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
+    visionModel: process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
+  },
+};
+
+// Provider ĐANG hoạt động (mặc định 'gemini'). Giá trị lạ ⇒ về gemini để không rơi im lặng về Vilao.
+export function activeProvider() {
+  const key = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
+  return PROVIDERS[key] || PROVIDERS.gemini;
+}
+
+// Giữ để tương thích: đường "khoá tường minh" (test key Vilao, override advance) vẫn dùng model nền Vilao.
+const VILAO_MODEL = PROVIDERS.vilao.textModel;
 
 function httpsRequest(url, options, bodyData, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -83,26 +110,36 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     onStream = null,
     model = null,
     apiKey = null,
+    provider = null,   // (chỉ khi có apiKey) 'gemini'|'vilao' — chọn endpoint cho khoá tường minh (tab Test API Key).
+    baseUrl = null,    // (chỉ khi có apiKey) đè thẳng URL /chat/completions; ưu tiên cao hơn provider.
     maxAttempts = 2,   // số lần thử tối đa (kể cả retry nội bộ khi lỗi mạng/timeout). Đặt 1 khi caller
                        // đã tự hedge (chạy song song) để khỏi chồng retry gây phí token.
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
   } = options;
 
-  let modelToUse = VILAO_MODEL;
-  if (aiModel === 'high') {
-    modelToUse = 'ram/gemini-3.5-flash-low';
+  // Chọn endpoint + khoá + model theo NGỮ CẢNH:
+  //  • CÓ options.apiKey (admin test khoá Vilao, hoặc override ADVANCE/DETAILED): đi ĐÚNG endpoint Vilao
+  //    với khoá + model được truyền — giữ nguyên hành vi cũ của các tính năng đó.
+  //  • KHÔNG có: dùng provider ĐANG hoạt động (mặc định Gemini chính hãng) — endpoint + khoá env + model
+  //    của provider. Tên model format Vilao mà caller truyền (translator…) BỎ QUA, vì mỗi provider đặt tên
+  //    khác nhau và cả app chỉ có MỘT model logic ("flash rẻ"); đổi model theo provider qua GEMINI_MODEL /
+  //    GEMINI_VISION_MODEL (hoặc VILAO_MODEL). `aiModel`/`useReasoning` không còn đổi model (giữ tham số cho
+  //    tương thích; `useReasoning` vẫn chỉ tác động cờ JSON mode bên dưới).
+  let chatUrl, currentApiKey, modelToUse;
+  if (apiKey) {
+    const prov = provider ? PROVIDERS[provider] : null;
+    chatUrl = baseUrl || prov?.chatUrl || PROVIDERS.vilao.chatUrl;   // mặc định Vilao (giữ hành vi cũ)
+    currentApiKey = apiKey;
+    modelToUse = model || prov?.textModel || VILAO_MODEL;
+  } else {
+    const prov = activeProvider();
+    chatUrl = prov.chatUrl;
+    currentApiKey = process.env[prov.apiKeyEnv];
+    if (!currentApiKey) {
+      throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'gemini'}' (đặt ${prov.apiKeyEnv})`);
+    }
+    modelToUse = imageBase64 ? prov.visionModel : prov.textModel;
   }
-
-  if (useReasoning) {
-    modelToUse = 'ram/gemini-3.5-flash-low';
-  }
-
-  // Cho phép chỉ định model tường minh (dùng cho kernel-mode Translator) — ưu tiên cao nhất.
-  if (model) {
-    modelToUse = model;
-  }
-
-  const currentApiKey = resolveApiKey({ apiKey }, process.env.VILAO_API_KEY);
 
   const messages = [];
   if (systemPrompt) {
@@ -151,7 +188,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
         }
       };
 
-      const response = await httpsRequest(VILAO_BASE_URL + "/v1/chat/completions", requestOptions, bodyData, timeoutMs);
+      const response = await httpsRequest(chatUrl, requestOptions, bodyData, timeoutMs);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         let errorText = '';
