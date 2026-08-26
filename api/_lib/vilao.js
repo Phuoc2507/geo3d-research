@@ -10,8 +10,10 @@ const PROVIDERS = {
   gemini: {
     chatUrl:  'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     apiKeyEnv: 'GEMINI_API_KEY',
-    textModel:   process.env.GEMINI_MODEL        || 'gemini-2.5-flash',
-    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    // Alias '-latest' (tự trỏ tới bản Flash GA hiện hành) — bền hơn ID phiên bản cứng, tránh 404
+    // "no longer available to new users" khi Google ngừng một phiên bản (vd gemini-2.5-flash).
+    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-latest',
+    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-latest',
   },
   vilao: {
     chatUrl:  'https://api.vilao.ai/v1/chat/completions',
