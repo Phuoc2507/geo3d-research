@@ -12,8 +12,11 @@ const PROVIDERS = {
     apiKeyEnv: 'GEMINI_API_KEY',
     // Alias '-latest' (tự trỏ tới bản Flash GA hiện hành) — bền hơn ID phiên bản cứng, tránh 404
     // "no longer available to new users" khi Google ngừng một phiên bản (vd gemini-2.5-flash).
-    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-latest',
-    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    // Flash-Lite: rẻ nhất + gần như không "thinking" ⇒ nhanh (bản Flash đầy đủ bật suy luận nên hay
+    // timeout với tác vụ xuất JSON dài). Alias '-latest' tự trỏ bản Lite GA hiện hành. Đổi qua
+    // gemini-flash-latest nếu cần Flash "xịn" hơn (đắt + chậm hơn).
+    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-lite-latest',
+    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-lite-latest',
   },
   vilao: {
     chatUrl:  'https://api.vilao.ai/v1/chat/completions',
