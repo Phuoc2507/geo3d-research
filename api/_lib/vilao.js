@@ -1,11 +1,43 @@
 import https from 'https';
 
-// Địa chỉ nhà cung cấp AI — lấy từ env để đổi được KHÔNG cần sửa code + build + deploy
-// giữa lúc sự cố (Vilao chập, đổi giá, hay cần trỏ sang endpoint tương thích OpenAI khác).
-// Bỏ dấu '/' thừa ở cuối để ghép '/v1/...' không sinh URL '//v1'.
-const VILAO_BASE_URL = (process.env.VILAO_BASE_URL || 'https://api.vilao.ai').replace(/\/+$/, '');
-// Model mặc định — cũng cho đổi qua env để thử model khác mà không đụng code.
-const VILAO_MODEL = process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low';
+// ── Provider registry ───────────────────────────────────────────────────────
+// Cả tầng LLM dùng chung format OpenAI (/chat/completions). Đổi provider CHÍNH chỉ bằng MỘT biến môi
+// trường LLM_PROVIDER (không phải sửa code): 'gemini' = Google chính hãng (mặc định) hoặc 'vilao' = dự
+// phòng. Mỗi provider tự khai endpoint + biến chứa API key + tên model (chữ / ảnh), override được qua env.
+//   • Gemini: endpoint OpenAI-compat — nuốt response_format json_object + image_url data-URL + Bearer auth,
+//     nên payload hiện tại chạy nguyên si. (Lưu ý: prompt-caching KHÔNG có trên shim này, chỉ có ở SDK gốc.)
+const PROVIDERS = {
+  gemini: {
+    chatUrl:  'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    // Alias '-latest' (tự trỏ tới bản Flash GA hiện hành) — bền hơn ID phiên bản cứng, tránh 404
+    // "no longer available to new users" khi Google ngừng một phiên bản (vd gemini-2.5-flash).
+    // Flash-Lite: rẻ nhất + gần như không "thinking" ⇒ nhanh (bản Flash đầy đủ bật suy luận nên hay
+    // timeout với tác vụ xuất JSON dài). Alias '-latest' tự trỏ bản Lite GA hiện hành. Đổi qua
+    // gemini-flash-latest nếu cần Flash "xịn" hơn (đắt + chậm hơn).
+    // gemini-flash-latest = bản Flash đầy đủ hiện hành (đang là 3.7 Flash, $0.75/$3.75) — chất lượng
+    // tốt hơn Flash-Lite. Flash bật "thinking" động nên chậm ⇒ ta GIỚI HẠN suy luận bằng
+    // GEMINI_REASONING_EFFORT (mặc định 'low') ở phần dựng request bên dưới ⇒ nhanh mà vẫn tốt.
+    textModel:   process.env.GEMINI_MODEL        || 'gemini-flash-latest',
+    visionModel: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-flash-latest',
+  },
+  vilao: {
+    chatUrl:  'https://api.vilao.ai/v1/chat/completions',
+    apiKeyEnv: 'VILAO_API_KEY',
+    textModel:   process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
+    visionModel: process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
+  },
+};
+
+// Provider ĐANG hoạt động (mặc định 'vilao'). Giá trị lạ ⇒ về vilao. Đặt LLM_PROVIDER=gemini để bật
+// Gemini chính hãng (code đã sẵn, chỉ đổi biến này).
+export function activeProvider() {
+  const key = (process.env.LLM_PROVIDER || 'vilao').toLowerCase();
+  return PROVIDERS[key] || PROVIDERS.vilao;
+}
+
+// Giữ để tương thích: đường "khoá tường minh" (test key Vilao, override advance) vẫn dùng model nền Vilao.
+const VILAO_MODEL = PROVIDERS.vilao.textModel;
 
 function httpsRequest(url, options, bodyData, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -82,22 +114,41 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     maxTokens = 4096,
     timeoutMs = 180000,
     imageBase64 = null,
+    aiModel = 'low',
     useReasoning = false,
     onStream = null,
     model = null,
     apiKey = null,
+    provider = null,   // (chỉ khi có apiKey) 'gemini'|'vilao' — chọn endpoint cho khoá tường minh (tab Test API Key).
+    baseUrl = null,    // (chỉ khi có apiKey) đè thẳng URL /chat/completions; ưu tiên cao hơn provider.
     maxAttempts = 2,   // số lần thử tối đa (kể cả retry nội bộ khi lỗi mạng/timeout). Đặt 1 khi caller
                        // đã tự hedge (chạy song song) để khỏi chồng retry gây phí token.
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
   } = options;
 
-  // Trước đây có nhánh chọn model theo `aiModel` ('high') và `useReasoning`, nhưng cả hai
-  // đều trỏ về ĐÚNG một model nên là nhánh chết (gợi ý một năng lực không có thật). Đã gỡ.
-  // Chỉ còn override tường minh qua `model` — dùng cho kernel-mode Translator.
-  // (`aiModel` không còn được đọc; caller cứ truyền cũng vô hại vì là thuộc tính object.)
-  const modelToUse = model || VILAO_MODEL;
-
-  const currentApiKey = resolveApiKey({ apiKey }, process.env.VILAO_API_KEY);
+  // Chọn endpoint + khoá + model theo NGỮ CẢNH:
+  //  • CÓ options.apiKey (admin test khoá Vilao, hoặc override ADVANCE/DETAILED): đi ĐÚNG endpoint Vilao
+  //    với khoá + model được truyền — giữ nguyên hành vi cũ của các tính năng đó.
+  //  • KHÔNG có: dùng provider ĐANG hoạt động (mặc định Gemini chính hãng) — endpoint + khoá env + model
+  //    của provider. Tên model format Vilao mà caller truyền (translator…) BỎ QUA, vì mỗi provider đặt tên
+  //    khác nhau và cả app chỉ có MỘT model logic ("flash rẻ"); đổi model theo provider qua GEMINI_MODEL /
+  //    GEMINI_VISION_MODEL (hoặc VILAO_MODEL). `aiModel`/`useReasoning` không còn đổi model (giữ tham số cho
+  //    tương thích; `useReasoning` vẫn chỉ tác động cờ JSON mode bên dưới).
+  let chatUrl, currentApiKey, modelToUse;
+  if (apiKey) {
+    const prov = provider ? PROVIDERS[provider] : null;
+    chatUrl = baseUrl || prov?.chatUrl || PROVIDERS.vilao.chatUrl;   // mặc định Vilao (giữ hành vi cũ)
+    currentApiKey = apiKey;
+    modelToUse = model || prov?.textModel || VILAO_MODEL;
+  } else {
+    const prov = activeProvider();
+    chatUrl = prov.chatUrl;
+    currentApiKey = process.env[prov.apiKeyEnv];
+    if (!currentApiKey) {
+      throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
+    }
+    modelToUse = imageBase64 ? prov.visionModel : prov.textModel;
+  }
 
   const messages = [];
   if (systemPrompt) {
@@ -132,6 +183,15 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     bodyObj.response_format = { type: 'json_object' };
   }
 
+  // GIỚI HẠN suy luận cho Gemini: Flash bật "thinking" động (ngốn tới ~24K token nghĩ ⇒ chậm/timeout).
+  // reasoning_effort: 'low'~1K, 'medium'~8K, 'high'~24K, 'none' tắt hẳn. Mặc định 'low' cho nhanh mà vẫn
+  // đủ suy luận cho hình học; đổi qua GEMINI_REASONING_EFFORT ('none' rẻ/nhanh nhất, 'high' kỹ hơn).
+  // CHỈ áp cho endpoint Gemini — provider khác (Vilao) không hiểu tham số này. 'default' = để model tự quyết.
+  const geminiEffort = (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
+  if (chatUrl.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
+    bodyObj.reasoning_effort = geminiEffort;
+  }
+
   let attempt = 0;
 
   while (attempt < maxAttempts) {
@@ -146,7 +206,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
         }
       };
 
-      const response = await httpsRequest(VILAO_BASE_URL + "/v1/chat/completions", requestOptions, bodyData, timeoutMs);
+      const response = await httpsRequest(chatUrl, requestOptions, bodyData, timeoutMs);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         let errorText = '';
