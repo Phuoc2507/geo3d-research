@@ -73,4 +73,35 @@ describe('compareCase', () => {
       expect(compareCase(g, { ok: true, answers: [{ kind: 'x' }] }).verdict).toBe('regress-answer');
     });
   });
+
+  // Translator được phép trả "tìm giao điểm" thành MỘT truy vấn `intersection`
+  // (đáp "point (x,y,z)") HOẶC thành BA `point_coord` x/y/z rời. Golden viết theo
+  // khuôn thứ nhất KHÔNG được đánh trượt oan khuôn thứ hai — gộp 3 toạ độ rồi so.
+  describe('gộp 3 toạ độ rời thành 1 điểm', () => {
+    const gPoint = { id: 't', plan: {}, expect: { ok: true, answers: [{ kind: 'intersection', text: 'point (1,2,0)' }] } };
+    const threeCoords = (x, y, z) => ({
+      ok: true,
+      answers: [
+        { kind: 'point_coord', approx: x, text: String(x) },
+        { kind: 'point_coord', approx: y, text: String(y) },
+        { kind: 'point_coord', approx: z, text: String(z) },
+      ],
+    });
+
+    it('pass khi 3 toạ độ khớp điểm kỳ vọng', () => {
+      expect(compareCase(gPoint, threeCoords(1, 2, 0)).verdict).toBe('pass');
+    });
+
+    it('regress-answer khi một toạ độ lệch', () => {
+      const r = compareCase(gPoint, threeCoords(1, 2, 5)); // z sai
+      expect(r.verdict).toBe('regress-answer');
+      expect(r.detail).toContain('#3');
+    });
+
+    it('không gộp nhầm khi kỳ vọng KHÔNG phải điểm', () => {
+      // golden mong 1 khoảng cách, engine trả 3 số → vẫn là số-lượng-đáp-khác, KHÔNG gộp.
+      const g = { id: 't', plan: {}, expect: { ok: true, answers: [{ kind: 'distance', text: '√2' }] } };
+      expect(compareCase(g, threeCoords(1, 2, 0)).verdict).toBe('regress-answer');
+    });
+  });
 });

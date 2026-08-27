@@ -3,6 +3,20 @@
 // So đáp bằng SỐ (answerCompare) — √2 khớp 1.4142…, KHÔNG so chuỗi thô.
 import { answersAgree, toNumeric } from '../answerCompare.js';
 
+/**
+ * Đọc chuỗi kỳ vọng dạng điểm "point (x,y,z)" (hoặc chỉ "(x,y,z)") thành [x,y,z] số.
+ * Trả null nếu không phải điểm 3 thành phần số (√2 cũng đọc được qua toNumeric).
+ */
+function parsePointText(text) {
+  if (typeof text !== 'string') return null;
+  const m = text.match(/\(([^)]*)\)/);
+  if (!m) return null;
+  const parts = m[1].split(',').map((s) => s.trim());
+  if (parts.length !== 3) return null;
+  const nums = parts.map(toNumeric);
+  return nums.every((n) => typeof n === 'number' && Number.isFinite(n)) ? nums : null;
+}
+
 // Đọc toạ độ dạng Scalar của engine ({approx, exact}) về số, làm gọn nhiễu float.
 function coordText(sc) {
   const v = typeof sc === 'object' && sc !== null ? sc.approx : sc;
@@ -58,6 +72,27 @@ export function compareCase(golden, result) {
     return { id, verdict: 'regress-status', detail: `kỳ vọng ok:true nhưng nay ok=${gotOk}, số đáp=${answers.length}` };
   }
   const want = expect.answers || [];
+
+  // GỘP điểm: "tìm giao điểm" được translator trả HỢP LỆ theo hai khuôn — MỘT truy vấn
+  // `intersection` (đáp "point (x,y,z)") HOẶC BA `point_coord` x/y/z rời. Golden viết theo
+  // khuôn một KHÔNG được đánh trượt oan khuôn hai. Khi kỳ vọng đúng một điểm và engine trả
+  // đúng ba toạ độ số (theo thứ tự x,y,z), so theo TỪNG THÀNH PHẦN. Guard want.length===1
+  // giữ cho không gộp nhầm các ca kỳ vọng nhiều đáp.
+  if (want.length === 1 && answers.length === 3) {
+    const pt = parsePointText(want[0]?.text);
+    if (pt) {
+      const nums = answers.map((a) =>
+        a && typeof a.approx === 'number' ? a.approx : toNumeric(answerText(a)),
+      );
+      if (nums.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+        const bad = pt.findIndex((w, i) => answersAgree(String(nums[i]), w) !== true);
+        return bad === -1
+          ? { id, verdict: 'pass', detail: 'khớp 1 điểm (gộp 3 toạ độ rời)' }
+          : { id, verdict: 'regress-answer', detail: `điểm lệch ở toạ độ #${bad + 1}: kỳ vọng ${pt[bad]} nay ${nums[bad]}` };
+      }
+    }
+  }
+
   if (want.length !== answers.length) {
     return { id, verdict: 'regress-answer', detail: `số/thứ tự đáp khác: kỳ vọng ${want.length}, nay ${answers.length}` };
   }
