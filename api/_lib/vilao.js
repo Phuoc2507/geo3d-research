@@ -1,4 +1,5 @@
 import https from 'https';
+import { ensureVertexAccessToken } from './vertexAuth.js';
 
 // ── Provider registry ───────────────────────────────────────────────────────
 // Cả tầng LLM dùng chung format OpenAI (/chat/completions). Đổi provider CHÍNH chỉ bằng MỘT biến môi
@@ -29,10 +30,30 @@ const PROVIDERS = {
   },
 };
 
-// Provider ĐANG hoạt động (mặc định 'vilao'). Giá trị lạ ⇒ về vilao. Đặt LLM_PROVIDER=gemini để bật
-// Gemini chính hãng (code đã sẵn, chỉ đổi biến này).
+// Vertex AI (endpoint OpenAI-compat của Google Cloud). KHÁC 'gemini' (AI Studio) ở 2 điểm:
+//   • URL mang PROJECT + LOCATION (region) → tính TƯƠI mỗi lần để nhận biến đặt lúc chạy (không cứng ở
+//     import). location 'global' dùng host 'aiplatform.googleapis.com'; region khác → '<loc>-aiplatform…'.
+//   • Auth = OAuth ACCESS TOKEN (sống ~60') đặt ở VERTEX_ACCESS_TOKEN — KHÔNG phải API key tĩnh; bên
+//     ngoài (bộ nạp token) tự làm mới trước khi hết hạn rồi ghi lại biến này (callVilao đọc TƯƠI mỗi lượt).
+//   • Tên model trên Vertex cần tiền tố nhà phát hành: 'google/gemini-2.5-flash' (đổi qua VERTEX_MODEL).
+export function vertexProvider() {
+  const project = process.env.VERTEX_PROJECT || '';
+  const loc = (process.env.VERTEX_LOCATION || 'global').trim();
+  const host = loc === 'global' ? 'aiplatform.googleapis.com' : `${loc}-aiplatform.googleapis.com`;
+  const model = process.env.VERTEX_MODEL || 'google/gemini-2.5-flash';
+  return {
+    chatUrl: `https://${host}/v1beta1/projects/${project}/locations/${loc}/endpoints/openapi/chat/completions`,
+    apiKeyEnv: 'VERTEX_ACCESS_TOKEN',
+    textModel: model,
+    visionModel: process.env.VERTEX_VISION_MODEL || model,
+  };
+}
+
+// Provider ĐANG hoạt động (mặc định 'vilao'). Giá trị lạ ⇒ về vilao. Đặt LLM_PROVIDER=gemini (AI Studio
+// chính hãng) hoặc LLM_PROVIDER=vertex (Vertex AI, tính tiền qua Google Cloud) — code đã sẵn, chỉ đổi biến.
 export function activeProvider() {
   const key = (process.env.LLM_PROVIDER || 'vilao').toLowerCase();
+  if (key === 'vertex') return vertexProvider();
   return PROVIDERS[key] || PROVIDERS.vilao;
 }
 
@@ -143,7 +164,12 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   } else {
     const prov = activeProvider();
     chatUrl = prov.chatUrl;
-    currentApiKey = process.env[prov.apiKeyEnv];
+    if (chatUrl.includes('aiplatform.googleapis.com')) {
+      // Vertex: token OAuth sống ~60' — mint/refresh từ khoá SA (VERTEX_SA_KEY_JSON) theo tiến trình.
+      currentApiKey = await ensureVertexAccessToken();
+    } else {
+      currentApiKey = process.env[prov.apiKeyEnv];
+    }
     if (!currentApiKey) {
       throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
     }
@@ -190,6 +216,13 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   const geminiEffort = (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
   if (chatUrl.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
     bodyObj.reasoning_effort = geminiEffort;
+  }
+  // Vertex (aiplatform) OpenAI-compat cũng nhận reasoning_effort cho Gemini 2.5+, NHƯNG mặc định TẮT
+  // (chỉ gửi khi VERTEX_REASONING_EFFORT được đặt) để tránh rủi ro endpoint từ chối tham số khi chưa xác
+  // nhận. Đặt VERTEX_REASONING_EFFORT=low để khớp 'flash-low' của Vilao khi so sánh.
+  const vertexEffort = (process.env.VERTEX_REASONING_EFFORT || '').trim();
+  if (chatUrl.includes('aiplatform.googleapis.com') && vertexEffort && vertexEffort !== 'default') {
+    bodyObj.reasoning_effort = vertexEffort;
   }
 
   let attempt = 0;
