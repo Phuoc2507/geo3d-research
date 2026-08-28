@@ -145,6 +145,9 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     maxAttempts = 2,   // số lần thử tối đa (kể cả retry nội bộ khi lỗi mạng/timeout). Đặt 1 khi caller
                        // đã tự hedge (chạy song song) để khỏi chồng retry gây phí token.
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
+    reasoningEffort = null, // ÉP mức suy luận PER-CALL ('none'|'low'|'medium'|'high') — ưu tiên hơn env
+                            // dùng chung. Cho bước dịch Lý/Hóa ép 'low' (dịch máy móc, chống timeout) mà
+                            // KHÔNG đổi reasoning của luồng Toán (Toán không truyền ⇒ giữ hành vi env).
   } = options;
 
   // Chọn endpoint + khoá + model theo NGỮ CẢNH:
@@ -213,14 +216,17 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   // reasoning_effort: 'low'~1K, 'medium'~8K, 'high'~24K, 'none' tắt hẳn. Mặc định 'low' cho nhanh mà vẫn
   // đủ suy luận cho hình học; đổi qua GEMINI_REASONING_EFFORT ('none' rẻ/nhanh nhất, 'high' kỹ hơn).
   // CHỈ áp cho endpoint Gemini — provider khác (Vilao) không hiểu tham số này. 'default' = để model tự quyết.
-  const geminiEffort = (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
+  // reasoningEffort truyền theo LỜI GỌI ưu tiên hơn env dùng chung (bước dịch Lý/Hóa ép 'low' → nhanh,
+  // hết timeout — mà KHÔNG đổi reasoning của luồng Toán vì Toán không truyền tham số này).
+  const callEffort = (reasoningEffort || '').trim();
+  const geminiEffort = callEffort || (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
   if (chatUrl.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
     bodyObj.reasoning_effort = geminiEffort;
   }
-  // Vertex (aiplatform) OpenAI-compat cũng nhận reasoning_effort cho Gemini 2.5+, NHƯNG mặc định TẮT
-  // (chỉ gửi khi VERTEX_REASONING_EFFORT được đặt) để tránh rủi ro endpoint từ chối tham số khi chưa xác
-  // nhận. Đặt VERTEX_REASONING_EFFORT=low để khớp 'flash-low' của Vilao khi so sánh.
-  const vertexEffort = (process.env.VERTEX_REASONING_EFFORT || '').trim();
+  // Vertex (aiplatform) OpenAI-compat cũng nhận reasoning_effort cho Gemini 2.5+, NHƯNG mặc định TẮT khi
+  // KHÔNG có override per-call lẫn env (chỉ gửi khi được yêu cầu tường minh) để tránh rủi ro endpoint từ
+  // chối tham số. Bước dịch Lý/Hóa truyền reasoningEffort='low' ⇒ Vertex cũng chạy nhanh, hết timeout.
+  const vertexEffort = callEffort || (process.env.VERTEX_REASONING_EFFORT || '').trim();
   if (chatUrl.includes('aiplatform.googleapis.com') && vertexEffort && vertexEffort !== 'default') {
     bodyObj.reasoning_effort = vertexEffort;
   }
