@@ -10159,8 +10159,9 @@ function solveDynamics(plan) {
   const violations = [];
   const errors = [];
   const meta = { config: "ngang", direction: "" };
-  const gS = plan.g !== void 0 ? scalarFromNumber(plan.g) : void 0;
-  const gN = plan.g;
+  const gEff = plan.g !== void 0 ? plan.g : 10;
+  const gS = scalarFromNumber(gEff);
+  const gN = gEff;
   const bodies = plan.ops.filter((o) => o.op === "body");
   const forces = plan.ops.filter((o) => o.op === "force");
   const bodyMap = /* @__PURE__ */ new Map();
