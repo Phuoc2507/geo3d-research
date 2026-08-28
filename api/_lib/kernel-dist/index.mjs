@@ -10466,7 +10466,7 @@ function buildDynamicsScene(plan, solved, tPhys) {
       zTop = H;
       const color = COLORS2[0];
       agents.push({ id: b.name, label: labelOf(b), initialPosition: start, color, radius: 0.14 });
-      const sgnX = down ? 1 : -1, sgnZ = down ? -1 : 1;
+      const sgnX = 1, sgnZ = down ? -1 : 1;
       const x0 = start[0], z0 = start[2];
       tracks.push({
         id: `mv_${b.name}`,
@@ -10547,7 +10547,7 @@ function buildDynamicsScene(plan, solved, tPhys) {
       ci++;
     }
   }
-  const margin = Math.max(0.5, 0.05 * Math.max(1, xMax - xMin, zTop));
+  const margin = Math.max(0.05, 0.12 * Math.max(xMax - xMin, zTop));
   points.push({ id: "G0", label: "", x: xMin - margin, y: 0, z: 0 });
   points.push({ id: "G1", label: "", x: xMax + margin, y: 0, z: 0 });
   lines.push({ id: "ground", from: "G0", to: "G1", style: "solid", color: "#8B8B8B" });
