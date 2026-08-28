@@ -10389,12 +10389,16 @@ function buildFbd(plan, solved) {
     const th = onIncline ? b.theta ?? 0 : 0;
     const hasTension = b.tensionN != null && b.tensionN > 1e-9;
     const forces = [];
-    if (b.weightN != null && b.weightN > 1e-9) forces.push({ label: "P", kind: "weight", mag: b.weightN, dirDeg: 270 });
-    if (onIncline && b.weightN != null && b.weightN > 1e-9 && b.sinTN != null && b.cosTN != null) {
-      forces.push({ label: "Px", kind: "weight", mag: b.weightN * b.sinTN, dirDeg: norm360(180 + th), component: true });
-      forces.push({ label: "Py", kind: "weight", mag: b.weightN * b.cosTN, dirDeg: norm360(270 + th), component: true });
+    const gEff = solved.gN ?? 10;
+    const wEff = b.weightN ?? (onIncline ? gEff : null);
+    const nEff = b.NN ?? (wEff != null && onIncline ? wEff * (b.cosTN ?? Math.cos(th * Math.PI / 180)) : null);
+    const fmsEff = b.frictionN ?? (wEff != null && onIncline && (b.muN ?? 0) > 1e-9 ? b.muN * nEff : null);
+    if (wEff != null && wEff > 1e-9) forces.push({ label: "P", kind: "weight", mag: wEff, dirDeg: 270 });
+    if (onIncline && wEff != null && wEff > 1e-9 && b.sinTN != null && b.cosTN != null) {
+      forces.push({ label: "Px", kind: "weight", mag: wEff * b.sinTN, dirDeg: norm360(180 + th), component: true });
+      forces.push({ label: "Py", kind: "weight", mag: wEff * b.cosTN, dirDeg: norm360(270 + th), component: true });
     }
-    if (b.NN != null && b.NN > 1e-9) forces.push({ label: "N", kind: "normal", mag: b.NN, dirDeg: onIncline ? norm360(90 + th) : 90 });
+    if (nEff != null && nEff > 1e-9) forces.push({ label: "N", kind: "normal", mag: nEff, dirDeg: onIncline ? norm360(90 + th) : 90 });
     if (hasTension) {
       const dir = b.config === "hanging" ? 90 : onIncline ? norm360(th) : 0;
       forces.push({ label: "T", kind: "tension", mag: b.tensionN, dirDeg: dir });
@@ -10405,7 +10409,7 @@ function buildFbd(plan, solved) {
       const dir = onIncline ? norm360(f.direction === "backward" ? 180 + th : th) : norm360((f.direction === "backward" ? 180 : 0) + (f.direction === "backward" ? -1 : 1) * (f.angleDeg ?? 0));
       forces.push({ label: "F", kind: "applied", mag: fN, dirDeg: dir });
     }
-    if (b.frictionN != null && b.frictionN > 1e-9) {
+    if (fmsEff != null && fmsEff > 1e-9) {
       let dir;
       if (onIncline) {
         dir = b.motionDesc === "len-doc" ? norm360(180 + th) : norm360(th);
@@ -10415,7 +10419,7 @@ function buildFbd(plan, solved) {
         const movingRight = b.v0N > 1e-9 ? true : b.v0N < -1e-9 ? false : (b.aN ?? 0) >= 0;
         dir = movingRight ? 180 : 0;
       }
-      forces.push({ label: "Fms", kind: "friction", mag: b.frictionN, dirDeg: dir });
+      forces.push({ label: "Fms", kind: "friction", mag: fmsEff, dirDeg: dir });
     }
     if (forces.length) bodies.push({ name: op.name, config: b.config, mass: b.mN ?? null, aN: b.aN ?? null, theta: onIncline ? th : null, forces });
   }
