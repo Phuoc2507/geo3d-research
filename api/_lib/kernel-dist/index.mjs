@@ -9756,6 +9756,8 @@ var DynamicsQuerySchema = external_exports.discriminatedUnion("kind", [
   external_exports.object({ kind: external_exports.literal("velocity_at"), of: Obj2, t: Num3.positive(), label: external_exports.string().optional() }),
   // x0 = 0 và chuyển động không đổi chiều trong miền hợp lệ ⇒ position = QUÃNG ĐƯỜNG.
   external_exports.object({ kind: external_exports.literal("position_at"), of: Obj2, t: Num3.positive(), label: external_exports.string().optional() }),
+  // Quãng đường đi TRONG GIÂY THỨ n: Δs = x(n) − x(n−1) (dạng đề VN rất phổ biến). n nguyên ≥ 1.
+  external_exports.object({ kind: external_exports.literal("distance_in_second"), of: Obj2, n: Num3.int().positive(), label: external_exports.string().optional() }),
   external_exports.object({ kind: external_exports.literal("time_when"), of: Obj2, position: Num3.positive(), label: external_exports.string().optional() }),
   // F3: đạt tốc độ cho trước; value: 0 = lúc dừng. DY-3 — chính tả field THEO V0 (`value`/`vUnit`).
   external_exports.object({
@@ -10315,6 +10317,19 @@ function computeDynQuery(solved, query, isSingle) {
           xN = b.v0N * t + 0.5 * a.n * t * t;
         }
         return { ok: true, answer: mkAns2("position_at", xS, xN, "m", query.label), checks: chk, tSolved: tEff };
+      }
+      case "distance_in_second": {
+        const b = bodyByName(query.of);
+        const a = reqA(b);
+        const q2 = b.quad;
+        const n = query.n;
+        const tHi = b.tStop !== null ? Math.min(n, b.tStop) : n;
+        const tLo = b.tStop !== null ? Math.min(n - 1, b.tStop) : n - 1;
+        const dS = sub2(evalQuadS(q2, scalarFromNumber(tHi)), evalQuadS(q2, scalarFromNumber(tLo)));
+        const dN = b.v0N * tHi + 0.5 * a.n * tHi * tHi - (b.v0N * tLo + 0.5 * a.n * tLo * tLo);
+        const closed = add2(mul(b.v0, scalarFromNumber(tHi - tLo)), mul(mul(rat(1n, 2n), a.s), scalarFromNumber(tHi * tHi - tLo * tLo)));
+        const chk = [resCheck2("kinematic_back", `\u0394s gi\xE2y th\u1EE9 ${n} = x(${n}) \u2212 x(${n - 1})`, sub2(dS, closed), Math.max(1, Math.abs(dN)))];
+        return { ok: true, answer: mkAns2("distance_in_second", dS, dN, "m", query.label), checks: chk, tSolved: tHi };
       }
       case "time_when": {
         const b = bodyByName(query.of);
