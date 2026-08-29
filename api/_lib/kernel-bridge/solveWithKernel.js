@@ -72,7 +72,9 @@ function jsonSafe(v) {
 // Engine tính tại a=1 ⇒ đáp exact chính xác bằng (số thuần)·a^k. Ghép ×a^k vào .text để KHÔNG
 // hiển thị số trần gây hiểu nhầm là số tuyệt đối. k: khoảng-cách/độ-dài=1, diện-tích=2, thể-tích=3.
 // GÓC và TỈ SỐ bất biến theo cỡ (k=0) ⇒ KHÔNG có trong bảng ⇒ giữ nguyên, không ghép.
-const SCALE_EXP = { distance: 1, length: 1, area: 2, volume: 3 };
+// sphere_metric (bán kính/đường kính/toạ-độ-z đỉnh–đáy của mặt cầu) là ĐỘ DÀI ⇒ k=1 (×a). Trước
+// đây thiếu ở bảng nên engine RỚT chữ 'a' (vd ra 25/8 thay vì 25a/8) — đây là bản vá lỗi đó.
+const SCALE_EXP = { distance: 1, length: 1, area: 2, volume: 3, sphere_metric: 1 };
 function scaleText(text, sym, k) {
   const t = String(text).trim();
   const s = k === 1 ? sym : `${sym}${k === 2 ? '²' : k === 3 ? '³' : '^' + k}`;
