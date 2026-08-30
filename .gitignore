@@ -1,0 +1,11 @@
+node_modules/
+dist/
+# Không commit kết quả eval từng-ca (có thể chứa nội dung đề); giữ report tổng hợp thì bỏ dòng dưới
+docs/nghien-cuu/eval-runs/**/results.json
+# Khoá & bí mật — TUYỆT ĐỐI không commit
+sa.json
+**/sa.json
+*service-account*.json
+vertex-keys/
+.env
+.env.*

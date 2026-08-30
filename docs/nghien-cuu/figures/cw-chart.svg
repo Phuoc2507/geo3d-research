@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 430" font-family="'Times New Roman',Georgia,serif">
+  <rect width="720" height="430" fill="#ffffff"/>
+  <text x="360" y="30" font-size="19" font-weight="700" fill="#1f2937" text-anchor="middle">Tỉ lệ “sai tự tin” (confidently-wrong) trên tập TEST-65 — thấp hơn là tốt hơn</text>
+  <!-- trục & lưới -->
+  <g stroke="#d1d5db" stroke-width="1">
+    <line x1="95" y1="360" x2="690" y2="360"/>
+    <line x1="95" y1="274.3" x2="690" y2="274.3"/>
+    <line x1="95" y1="188.6" x2="690" y2="188.6"/>
+    <line x1="95" y1="102.9" x2="690" y2="102.9"/>
+  </g>
+  <g font-size="13" fill="#6b7280" text-anchor="end">
+    <text x="88" y="365">0%</text><text x="88" y="279">10%</text><text x="88" y="193">20%</text><text x="88" y="107">30%</text>
+  </g>
+  <line x1="95" y1="60" x2="95" y2="360" stroke="#9ca3af" stroke-width="1"/>
+  <!-- nhóm 2.5-flash -->
+  <rect x="175" y="347.1" width="72" height="12.9" fill="#0f766e"/>
+  <text x="211" y="340" font-size="13" font-weight="700" fill="#0f766e" text-anchor="middle">1.5%</text>
+  <rect x="255" y="162" width="72" height="198" fill="#dc2626"/>
+  <text x="291" y="154" font-size="13" font-weight="700" fill="#dc2626" text-anchor="middle">23.1%</text>
+  <text x="251" y="382" font-size="14" fill="#374151" text-anchor="middle">Gemini 2.5-flash</text>
+  <!-- nhóm 3.5-flash -->
+  <rect x="445" y="307" width="72" height="53" fill="#0f766e"/>
+  <text x="481" y="300" font-size="13" font-weight="700" fill="#0f766e" text-anchor="middle">6.2%</text>
+  <rect x="525" y="109.6" width="72" height="250.4" fill="#dc2626"/>
+  <text x="561" y="102" font-size="13" font-weight="700" fill="#dc2626" text-anchor="middle">29.2%</text>
+  <text x="521" y="382" font-size="14" fill="#374151" text-anchor="middle">Gemini 3.5-flash</text>
+  <!-- chú giải -->
+  <rect x="230" y="402" width="16" height="16" fill="#0f766e"/><text x="252" y="415" font-size="14" fill="#374151">Hệ (Neuro-Symbolic)</text>
+  <rect x="430" y="402" width="16" height="16" fill="#dc2626"/><text x="452" y="415" font-size="14" fill="#374151">LLM giải thẳng</text>
+</svg>

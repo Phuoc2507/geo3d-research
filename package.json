@@ -1,0 +1,24 @@
+{
+  "name": "geo3d-research",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Hệ Neuro-Symbolic giải hình học không gian: LLM dịch đề → engine tất định tính & tự kiểm → cổng từ chối an toàn. Phần NGHIÊN CỨU (engine + benchmark + đánh giá), tách khỏi ứng dụng thương mại.",
+  "license": "MIT",
+  "scripts": {
+    "build:kernel": "node scripts/build-kernel.mjs",
+    "bench:gate": "npm run build:kernel && node scripts/bench-gate.mjs",
+    "bench:capture": "npm run build:kernel && node scripts/bench-capture.mjs",
+    "smoke:kernel": "npm run build:kernel && node scripts/kernel-smoke.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5",
+    "vitest": "^2.1.9",
+    "typescript": "^5.8.3",
+    "@types/node": "^22.16.5"
+  }
+}

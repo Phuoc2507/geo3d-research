@@ -1,0 +1,235 @@
+// api/_lib/kernel-bridge/solveWithKernel.js
+// Đường ống "kernel mode": đề → (LLM Translator) → Plan JSON → engine.run() → hình + đáp số.
+// Import engine từ bản đã build (esbuild) để chạy được trong route .js thuần.
+import { runAny, RunPlanSchema, AnalysisPlanSchema, entityTableToGeometryData } from '../kernel-dist/index.mjs';
+import { callVilao } from '../vilao.js';
+import { TRANSLATOR_PROMPT } from './translatorPrompt.js';
+import { answersAgree } from '../answerCompare.js';
+import { classifyTier, tierFromThrow } from './classifyTier.js';
+
+// Gỡ hàng rào ```json nếu model lỡ thêm dù đã dặn.
+function extractJson(raw) {
+  return String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+}
+
+// Chuẩn hoá plan TẤT ĐỊNH trước khi validate — sửa vài khác biệt HÌNH THỨC mà model hay mắc
+// (cùng ý nghĩa, khác cách viết), KHÔNG đoán/không bịa dữ kiện. Áp cho MỌI model → giảm "lỗi dịch"
+// mà không phải nuôi prompt riêng từng model. Chỉ NỚI cho qua các biến thể tương đương; plan sai
+// thật vẫn hỏng (queries tham chiếu thực thể không có ⇒ engine ném như cũ).
+function normalizePlan(json) {
+  if (!json || typeof json !== 'object' || 'analyze' in json) return json; // chỉ RunPlan
+  // 1) Bài công thức (nón/trụ/cầu/chóp cụt…) không cần dựng hình → model hay để ops rỗng/thiếu.
+  //    Schema đòi ops ≥ 1 (plan vàng nhét 1 điểm giả). Ta tự nhét điểm giả nếu thiếu.
+  if (!Array.isArray(json.ops) || json.ops.length === 0) {
+    json.ops = [{ op: 'oxyz_point', name: '__O', at: [0, 0, 0] }];
+  }
+  if (typeof json.solidName !== 'string' || !json.solidName) json.solidName = 'figure';
+  // 2) point_dir.base phải là TOẠ ĐỘ [x,y,z]; model hay ghi TÊN điểm đã dựng → thay bằng toạ độ của nó.
+  const ptAt = {};
+  for (const op of json.ops) if (op && op.op === 'oxyz_point' && op.name && Array.isArray(op.at)) ptAt[op.name] = op.at;
+  for (const op of json.ops) {
+    const by = op && op.by;
+    if (by && by.form === 'point_dir' && typeof by.base === 'string' && ptAt[by.base]) by.base = ptAt[by.base];
+  }
+  return json;
+}
+
+// Đề tiếng Việt → Plan JSON hợp lệ (đã validate bằng schema của engine).
+// Model dịch có thể đổi qua env VILAO_TRANSLATOR_MODEL; mặc định gemini-flash (nhanh/rẻ).
+const TRANSLATOR_MODEL = process.env.VILAO_TRANSLATOR_MODEL || 'ram/gemini-3.5-flash-low';
+
+// Timeout MẶC ĐỊNH cho bước dịch. Đo thực tế: 5–10s/đề (cả gemini lẫn claude). Đặt 25s = thừa đệm.
+// KHÔNG dùng mặc định 180s của callVilao: khi engine là bước THỬ TRƯỚC rồi mới rơi về luồng cũ,
+// một lần LLM treo sẽ bắt người dùng chờ 3 phút trước khi luồng cũ mới bắt đầu.
+const TRANSLATE_TIMEOUT_MS = Number(process.env.VILAO_TRANSLATOR_TIMEOUT_MS) || 25000;
+
+export async function planFromProblem(problem, options = {}) {
+  // `options.systemPrompt` cho phép caller (vd bộ tối ưu prompt tiến hoá) thử một prompt ỨNG VIÊN
+  // khác mà KHÔNG đụng đường sản xuất. Mặc định giữ nguyên TRANSLATOR_PROMPT ⇒ hành vi cũ không đổi.
+  const systemPrompt = options.systemPrompt || TRANSLATOR_PROMPT;
+  // Chọn nhà cung cấp LLM cho khâu DỊCH. Mặc định Vilao (đường sản xuất không đổi).
+  // options.provider === 'gemini' → dùng Gemini chính hãng (cho eval so sánh đa mô hình, chạy trên máy).
+  let raw;
+  if (options.provider === 'vertex') {
+    const { callVertex } = await import('../vertex.js');
+    raw = await callVertex(systemPrompt, problem, {
+      model: options.model || process.env.VERTEX_MODEL || null,
+      maxTokens: 4096,
+      timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
+      json: true,
+    });
+  } else if (options.provider === 'openai') {
+    const { callOpenAICompat } = await import('../openaiCompat.js');
+    raw = await callOpenAICompat(systemPrompt, problem, {
+      model: options.model || process.env.OAI_MODEL || null,
+      maxTokens: 4096,
+      timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
+      apiKey: options.apiKey || null,
+      json: true,
+    });
+  } else if (options.provider === 'gemini') {
+    const { callGemini } = await import('../gemini.js');
+    raw = await callGemini(systemPrompt, problem, {
+      model: options.model || process.env.GEMINI_TRANSLATOR_MODEL || null,
+      maxTokens: 4096,
+      timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
+      apiKey: options.apiKey || null,
+      json: true,
+    });
+  } else {
+    raw = await callVilao(systemPrompt, problem, {
+      model: options.model || TRANSLATOR_MODEL,
+      maxTokens: 4096,
+      timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
+      apiKey: options.apiKey || null,
+    });
+  }
+  let json;
+  try {
+    json = JSON.parse(extractJson(raw));
+  } catch {
+    throw new Error('Translator returned non-JSON output');
+  }
+  // Bộ dịch TỰ KHƯỚC TỪ khi đề thiếu số liệu / ngoài danh mục (chống "phục vụ sai"). Ném ⇒ route
+  // rơi về luồng LLM cũ, thay vì để engine trả đáp tự tin cho một bài không nên trả.
+  if (json && typeof json === 'object' && json.abstain === true) {
+    throw new Error('translator abstained: ' + (json.abstain_reason || 'thiếu số liệu / ngoài danh mục'));
+  }
+  // Sửa các khác biệt hình thức tất định (ops rỗng, base là tên điểm…) trước khi validate.
+  json = normalizePlan(json);
+  // Plan có khối `analyze` (bài tham số/tối ưu/hàm số) dùng schema analysis; còn lại là plan hình học thuần.
+  const schema = json && typeof json === 'object' && 'analyze' in json ? AnalysisPlanSchema : RunPlanSchema;
+  const parsed = schema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error('Translator plan failed schema: ' + (parsed.error.issues[0]?.message || 'invalid'));
+  }
+  // "scaleSymbol" (thang CHỮ): bài ĐO TUYỆT ĐỐI trên hình RẮN-tới-đồng-dạng, kích thước cho bằng một
+  // chữ duy nhất (vd cạnh 'a'). Engine toạ-độ-hoá tại a=1 rồi solvePlan ghép ×a^k vào đáp. Schema
+  // KHÔNG khai trường này nên safeParse loại bỏ ⇒ giữ lại từ json gốc. Chỉ nhận MỘT chữ cái.
+  if (typeof json.scaleSymbol === 'string' && /^[a-zA-Z]$/.test(json.scaleSymbol)) {
+    parsed.data.scaleSymbol = json.scaleSymbol;
+  }
+  return parsed.data;
+}
+
+// Chạy một Plan qua engine → gói kết quả để frontend dùng.
+// Đáp số exact của engine mang BigInt (num/den của phân số chính xác). JSON.stringify NÉM khi gặp
+// BigInt ⇒ res.json() của route sẽ chết. Chuyển BigInt → chuỗi để mọi consumer serialize được.
+// (Giá trị exact vẫn đọc được ở .text dạng '√2'; đây chỉ là làm cho JSON an toàn.)
+function jsonSafe(v) {
+  if (typeof v === 'bigint') return v.toString();
+  if (Array.isArray(v)) return v.map(jsonSafe);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) out[k] = jsonSafe(val);
+    return out;
+  }
+  return v;
+}
+
+// Chú thích THANG CHỮ cho đáp đo tuyệt đối trên hình xác-định-tới-đồng-dạng (vd cạnh 'a').
+// Engine tính tại a=1 ⇒ đáp exact chính xác bằng (số thuần)·a^k. Ghép ×a^k vào .text để KHÔNG
+// hiển thị số trần gây hiểu nhầm là số tuyệt đối. k: khoảng-cách/độ-dài=1, diện-tích=2, thể-tích=3.
+// GÓC và TỈ SỐ bất biến theo cỡ (k=0) ⇒ KHÔNG có trong bảng ⇒ giữ nguyên, không ghép.
+// sphere_metric CHỈ trả ĐỘ DÀI (bán kính/đường kính/toạ-độ-z đỉnh–đáy — xem query.ts `what`),
+// nên thang chữ nhân ×a¹ giống distance. Trước đây thiếu ⇒ engine RỚT chữ 'a' ở bài mặt cầu thang chữ
+// (vd bán kính mặt cầu ngoại tiếp = 25a/8 bị trả thành 25/8). Diện tích/thể tích mặt cầu KHÔNG đi
+// qua đây (chúng là kind 'area'/'volume', đã có sẵn số mũ 2/3).
+const SCALE_EXP = { distance: 1, length: 1, area: 2, volume: 3, sphere_metric: 1 };
+function scaleText(text, sym, k) {
+  const t = String(text).trim();
+  const s = k === 1 ? sym : `${sym}${k === 2 ? '²' : k === 3 ? '³' : '^' + k}`;
+  if (t === '1') return s;                          // a·1 → a
+  if (/^\d+(?:\.\d+)?$/.test(t)) return `${t}${s}`; // 2 → 2a ; 13 → 13a
+  return `${s}·${t}`;                               // √3/3 → a·√3/3
+}
+export function applyScaleSymbol(answers, sym) {
+  if (!sym || !Array.isArray(answers)) return answers;
+  return answers.map((a) => {
+    const k = SCALE_EXP[a && a.kind];
+    if (!k || a.text == null) return a;
+    const t = String(a.text).trim();
+    if (t === '' || t === '0' || a.approx === 0) return a; // đáp 0 (vd thẳng hàng ⇒ area 0): không ghép
+    // approx là giá trị tại a=1, sẽ gây hiểu nhầm nếu hiện dạng thập phân trần ⇒ bỏ khỏi `approx`.
+    // Nhưng GIỮ nó ở `approxAtScale`: đó là số ĐO ĐƯỢC TRÊN HÌNH đang vẽ (thang a=1) — dữ liệu
+    // hợp lệ của Mức 2, UI hiện kèm nhãn "ở hình này" (gated bởi pref showIllustrationValues).
+    return {
+      ...a,
+      text: scaleText(a.text, sym, k),
+      approx: null,
+      approxAtScale: typeof a.approx === 'number' && Number.isFinite(a.approx) ? a.approx : null,
+      scaleSymbol: sym,
+      scaleExp: k,
+    };
+  });
+}
+
+export function solvePlan(plan) {
+  const result = runAny(plan);
+  // Nhánh analysis: runAnalysis trả { parameter, answer } và KHÔNG có entities ⇒ chưa dựng được hình.
+  if (!('entities' in result)) {
+    // Nhánh analysis: runAnalysis nay trả THÊM hình dựng tại nghiệm (optimize/solve có op hình học)
+    // ⇒ route vẽ hiện được cả hình lẫn đáp số. Gắn `kind` để calculation_log của route định dạng gọn.
+    return jsonSafe({
+      ok: result.ok,
+      geometry: result.geometry ?? null,
+      parameter: result.parameter,
+      answers: result.ok ? [{ kind: 'kết quả', ...result.answer }] : [],
+      violations: result.violations,
+      errors: result.errors,
+    });
+  }
+  const answers = applyScaleSymbol(result.answers, plan.scaleSymbol); // ghép ×a^k nếu là bài THANG CHỮ
+  // MỨC 2 — "minh hoạ đại diện". Bài THANG CHỮ chỉ xác định TỚI ĐỒNG DẠNG: engine buộc phải chọn
+  // MỘT thang cụ thể (a=1) để dựng được hình. Đáp CHỮ (vd 'a·√3/3') vẫn đúng TỔNG QUÁT, nhưng mọi
+  // số ĐO TRÊN HÌNH đang vẽ chỉ đúng ở đúng thang đó ⇒ không được khẳng định như số tuyệt đối.
+  // Cờ này là thứ classifyTier đọc để trả level 2 (trước nay chưa ai đặt ⇒ nhánh Mức 2 nằm chết).
+  const representative = Array.isArray(answers) && answers.some((a) => a && a.scaleSymbol);
+  return jsonSafe({
+    ok: result.ok,
+    representative,
+    geometry: entityTableToGeometryData(result.entities, plan.solidName || 'figure'),
+    answers,
+    violations: result.violations,
+    errors: result.errors,
+    trace: result.trace,
+  });
+}
+
+export async function solveProblem(problem, options = {}) {
+  // Khước từ dịch (abstain / non-JSON / sai schema) TRẢ object Mức-3 có tier, thay vì để exception
+  // nổ. Route caller vẫn rơi về LLM fallback — nay có `tier` để render lời giải thích trung thực.
+  let plan;
+  try {
+    plan = await planFromProblem(problem, options);
+  } catch (e) {
+    return {
+      plan: null, ok: false, geometry: null, answers: [], violations: [],
+      errors: [{ message: e && e.message ? e.message : 'lỗi dịch' }],
+      tier: tierFromThrow(e),
+    };
+  }
+
+  const result = { plan, ...solvePlan(plan) };
+  result.tier = classifyTier(result); // MỘT nguồn sự thật; draw/solve thừa hưởng object này.
+
+  // A1 — ĐỐI CHIẾU 2 ĐƯỜNG (gated qua env KERNEL_CROSSCHECK='on'; mặc định TẮT ⇒ không tốn thêm).
+  if (String(process.env.KERNEL_CROSSCHECK || '').trim() === 'on' && result.ok && result.answers?.length) {
+    try {
+      const r2 = solvePlan(await planFromProblem(problem, options));
+      const a1text = result.answers[0]?.text;
+      const a2num = r2.answers?.[0]?.approx;
+      const agree = a2num != null && Number.isFinite(a2num) ? answersAgree(a1text, a2num, 1e-3) : null;
+      if (agree === false) {
+        const disagreed = {
+          ...result, ok: false, crossCheck: 'disagree',
+          errors: [...(result.errors || []), { message: `cross-check lệch: "${a1text}" vs "${r2.answers?.[0]?.text}"` }],
+        };
+        disagreed.tier = classifyTier(disagreed); // ok flip false ⇒ tier phải tính lại (không stale).
+        return disagreed;
+      }
+      result.crossCheck = agree === true ? 'agree' : 'unverified';
+    } catch { /* lỗi khi đối chiếu ⇒ giữ kết quả gốc, không chặn */ }
+  }
+  return result;
+}

@@ -1,0 +1,102 @@
+[
+  {
+    "gen": 0,
+    "bestFitness": 0.6738,
+    "bestAccuracy": 0.8714,
+    "bestTokens": 9883,
+    "bestKey": "6-3-2-0-1",
+    "meanFitness": 0.0758,
+    "meanAccuracy": 0.273,
+    "uniqueGenomes": 12
+  },
+  {
+    "gen": 1,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.3358,
+    "meanAccuracy": 0.5333,
+    "uniqueGenomes": 22
+  },
+  {
+    "gen": 2,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.4702,
+    "meanAccuracy": 0.6679,
+    "uniqueGenomes": 31
+  },
+  {
+    "gen": 3,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.6179,
+    "meanAccuracy": 0.8155,
+    "uniqueGenomes": 38
+  },
+  {
+    "gen": 4,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.7505,
+    "meanAccuracy": 0.9484,
+    "uniqueGenomes": 47
+  },
+  {
+    "gen": 5,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.6717,
+    "meanAccuracy": 0.8694,
+    "uniqueGenomes": 56
+  },
+  {
+    "gen": 6,
+    "bestFitness": 0.8022,
+    "bestAccuracy": 1,
+    "bestTokens": 9888,
+    "bestKey": "0-2-3-6-7",
+    "meanFitness": 0.569,
+    "meanAccuracy": 0.7667,
+    "uniqueGenomes": 65
+  },
+  {
+    "gen": 7,
+    "bestFitness": 0.8027,
+    "bestAccuracy": 1,
+    "bestTokens": 9865,
+    "bestKey": "6-3-0-7",
+    "meanFitness": 0.6356,
+    "meanAccuracy": 0.8333,
+    "uniqueGenomes": 70
+  },
+  {
+    "gen": 8,
+    "bestFitness": 0.8027,
+    "bestAccuracy": 1,
+    "bestTokens": 9865,
+    "bestKey": "6-3-0-7",
+    "meanFitness": 0.4449,
+    "meanAccuracy": 0.6425,
+    "uniqueGenomes": 78
+  },
+  {
+    "gen": 9,
+    "bestFitness": 0.8027,
+    "bestAccuracy": 1,
+    "bestTokens": 9865,
+    "bestKey": "6-3-0-7",
+    "meanFitness": 0.7056,
+    "meanAccuracy": 0.9032,
+    "uniqueGenomes": 85
+  }
+]

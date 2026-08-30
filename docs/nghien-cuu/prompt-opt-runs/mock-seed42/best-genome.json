@@ -1,0 +1,52 @@
+{
+  "seed": 42,
+  "provider": "mock",
+  "config": {
+    "pop": 12,
+    "gen": 10,
+    "elite": 2,
+    "tournamentK": 3,
+    "pMutBit": 0.15,
+    "pMutSwap": 0.3,
+    "initPOn": 0.5
+  },
+  "lambda": 0.02,
+  "bestKey": "6-3-0-7",
+  "activeTags": [
+    "queries-list",
+    "integer-coords",
+    "json-only",
+    "verify-asserts"
+  ],
+  "bits": [
+    1,
+    0,
+    0,
+    1,
+    0,
+    0,
+    1,
+    1
+  ],
+  "order": [
+    5,
+    2,
+    4,
+    6,
+    3,
+    0,
+    1,
+    7
+  ],
+  "stats": {
+    "fitness": 0.8027,
+    "accuracy": 1,
+    "passes": 210,
+    "total": 210,
+    "tokens": 9865,
+    "abstain": 0,
+    "verdictCounts": {
+      "pass": 210
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "note": "Bộ ca ĐO CỔNG TỪ CHỐI (abstain gate). Mục đích: đo precision/recall của khâu 'thà từ chối còn hơn bịa' — điều benchmark golden hiện KHÔNG đo được (golden gần như không có ca phải từ chối). expect='abstain' = đề THIẾU dữ kiện/ngoài danh mục, hệ ĐÚNG khi từ chối. expect='answer' = đề đủ dữ kiện (đối chứng), hệ ĐÚNG khi trả đáp; nếu hệ từ chối các ca này là 'từ chối oan' (false abstain). Đáp chuẩn do người soạn xác định, KHÔNG lấy từ máy.",
+  "cases": [
+    { "id": "ab-cube-noedge", "expect": "abstain", "why": "thể tích TUYỆT ĐỐI nhưng không cho cạnh và không cho một chữ cỡ nào", "text": "Cho một hình lập phương. Tính thể tích khối lập phương đó." },
+    { "id": "ab-tetra-noedge", "expect": "abstain", "why": "thể tích tuyệt đối, hình chóp đều nhưng không cho kích thước", "text": "Cho hình chóp tam giác đều S.ABC. Tính thể tích khối chóp." },
+    { "id": "ab-tri-area-noside", "expect": "abstain", "why": "diện tích tuyệt đối của tam giác đều nhưng không cho cạnh", "text": "Cho một tam giác đều. Tính diện tích tam giác đó." },
+    { "id": "ab-dist-A-SBD-nolen", "expect": "abstain", "why": "khoảng cách tuyệt đối nhưng không cho một độ dài nào", "text": "Cho hình chóp S.ABCD có đáy ABCD là hình vuông và SA vuông góc với mặt phẳng đáy. Tính khoảng cách từ điểm A đến mặt phẳng (SBD)." },
+    { "id": "ab-box-abc-angle", "expect": "abstain", "why": "góc giữa đường chéo và đáy phụ thuộc ĐỘC LẬP vào a,b,c (không phải một thang chung) nên không ra số cụ thể", "text": "Cho hình hộp chữ nhật có ba kích thước a, b, c bất kì đôi một khác nhau. Tính số đo góc giữa đường chéo của hình hộp và mặt đáy." },
+    { "id": "ab-ratio-volume", "expect": "abstain", "why": "chỉ cho TỈ SỐ, không cho cỡ tuyệt đối", "text": "Cho hai khối chóp, biết thể tích khối thứ nhất gấp đôi thể tích khối thứ hai. Tính thể tích khối chóp thứ nhất." },
+    { "id": "ab-ratio-edges", "expect": "abstain", "why": "chỉ cho tỉ số các cạnh, hình còn tỉ lệ tự do cho thể tích tuyệt đối", "text": "Cho hình chóp S.ABC có ba cạnh bên đôi một vuông góc và tỉ số độ dài ba cạnh bên là 1 : 2 : 3. Tính thể tích khối chóp S.ABC." },
+    { "id": "ab-locus-equidistant", "expect": "abstain", "why": "bài QUỸ TÍCH tổng quát, không phải một truy vấn trả số/đối tượng", "text": "Trong không gian, cho hai mặt phẳng (P) và (Q) cắt nhau. Tìm quỹ tích các điểm cách đều hai mặt phẳng (P) và (Q)." },
+    { "id": "ab-inequality-tetra", "expect": "abstain", "why": "bài BẤT ĐẲNG THỨC/biện luận tổng quát", "text": "Cho tứ diện ABCD bất kì. Chứng minh rằng tổng độ dài sáu cạnh của tứ diện lớn hơn ba lần khoảng cách lớn nhất giữa hai cạnh đối." },
+    { "id": "ab-param-plane", "expect": "abstain", "why": "biện luận theo tham số, đề mở, không một truy vấn số cụ thể", "text": "Trong không gian Oxyz cho họ mặt phẳng (Pm): x + m·y + z = 0 với m là tham số. Hãy biện luận vị trí tương đối của (Pm) với trục Oy theo m." },
+    { "id": "ab-two-skew-nolen", "expect": "abstain", "why": "khoảng cách hai đường chéo nhau nhưng không cho toạ độ/độ dài nào", "text": "Cho hai đường thẳng a và b chéo nhau trong không gian. Tính khoảng cách giữa hai đường thẳng a và b." },
+    { "id": "ab-sphere-point-nolen", "expect": "abstain", "why": "khoảng cách điểm–mặt cầu nhưng không cho bán kính hay toạ độ", "text": "Cho một mặt cầu (S) và một điểm M nằm ngoài mặt cầu. Tính khoảng cách từ M đến mặt cầu (S)." },
+
+    { "id": "ok-cube-a", "expect": "answer", "why": "xác định tới đồng dạng, cỡ cho bằng một chữ a (thang chữ) — phải trả a^3", "text": "Cho hình lập phương ABCD.A'B'C'D' có cạnh bằng a. Tính thể tích khối lập phương." },
+    { "id": "ok-tetra-2", "expect": "answer", "why": "tứ diện đều cạnh 2 — đủ dữ kiện", "text": "Cho tứ diện đều ABCD có cạnh bằng 2. Tính thể tích khối tứ diện." },
+    { "id": "ok-sphere-r3", "expect": "answer", "why": "mặt cầu bán kính R=3 — đủ dữ kiện", "text": "Cho khối cầu (S) có bán kính R = 3. Tính thể tích khối cầu (S)." },
+    { "id": "ok-box-345-diag", "expect": "answer", "why": "hình hộp chữ nhật kích thước cụ thể 3,4,5 — đường chéo xác định", "text": "Cho hình hộp chữ nhật có ba kích thước lần lượt là 3, 4 và 5. Tính độ dài đường chéo của hình hộp chữ nhật." },
+    { "id": "ok-pyr-square-a", "expect": "answer", "why": "chóp vuông cạnh a, SA=a, ⊥ đáy — khoảng cách xác định tới đồng dạng (thang chữ a)", "text": "Cho hình chóp S.ABCD có đáy ABCD là hình vuông cạnh a, SA vuông góc với mặt phẳng đáy và SA = a. Tính khoảng cách từ điểm A đến mặt phẳng (SBD)." },
+    { "id": "ok-plane-abc", "expect": "answer", "why": "toạ độ ba điểm cụ thể — phương trình mặt phẳng xác định", "text": "Trong không gian Oxyz cho ba điểm A(1; 0; 0), B(0; 2; 0), C(0; 0; 3). Viết phương trình mặt phẳng (ABC)." },
+    { "id": "ok-tri-angle-fixed", "expect": "answer", "why": "cạnh đáy và chiều cao cùng bằng a — góc xác định theo tỉ lệ cố định", "text": "Cho hình chóp tam giác đều S.ABC có cạnh đáy bằng a và chiều cao bằng a. Tính số đo góc giữa cạnh bên và mặt phẳng đáy." },
+    { "id": "ok-square-area-a", "expect": "answer", "why": "hình vuông cạnh a — diện tích a^2 (thang chữ)", "text": "Cho hình vuông ABCD có cạnh bằng a. Tính diện tích hình vuông ABCD." }
+  ]
+}
