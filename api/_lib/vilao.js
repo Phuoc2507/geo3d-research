@@ -124,6 +124,46 @@ export function isEmptyVilaoContent(data) {
   return typeof content !== 'string' || content.trim() === '';
 }
 
+// Vilao có endpoint trả JSON ĐƠN (model 'ram/*') HOẶC SSE STREAMING (model 'ts/*': mỗi dòng
+// 'data: {chat.completion.chunk...}'). Chuẩn hoá cả hai về { choices:[{message:{content}}], usage }
+// để phần dưới xử lý như nhau. Ném khi không parse được gì (caller bắt → "Failed to parse").
+export function parseVilaoBody(dataText) {
+  const trimmed = (dataText || '').trim();
+  if (!trimmed) throw new Error('empty body');
+
+  // 1) JSON đơn (non-streaming) — thử trước. KHÔNG bắt đầu bằng 'data:' ⇒ chắc chắn không phải SSE.
+  if (!trimmed.startsWith('data:')) {
+    return JSON.parse(trimmed);
+  }
+
+  // 2) SSE streaming: gộp content của TỪNG chunk (delta.content, hoặc message.content ở chunk cuối).
+  let content = '';
+  let usage = null;
+  let finish = null;
+  let sawChunk = false;
+  for (const rawLine of trimmed.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    let chunk;
+    try { chunk = JSON.parse(payload); } catch { continue; }
+    sawChunk = true;
+    const choice = chunk.choices && chunk.choices[0];
+    if (choice) {
+      const piece = (choice.delta && typeof choice.delta.content === 'string')
+        ? choice.delta.content
+        : (choice.message && typeof choice.message.content === 'string' ? choice.message.content : '');
+      content += piece;
+      if (choice.finish_reason) finish = choice.finish_reason;
+    }
+    if (chunk.usage) usage = chunk.usage;
+  }
+  // Có tiền tố 'data:' nhưng không chunk nào parse được ⇒ coi như hỏng, để caller ném "Failed to parse".
+  if (!sawChunk) return JSON.parse(trimmed);
+  return { choices: [{ message: { content }, finish_reason: finish }], usage };
+}
+
 export function resolveApiKey(options = {}, envKey = process.env.VILAO_API_KEY) {
   const key = options.apiKey || envKey;
   if (!key) throw new Error('Vilao API key is not set (opts.apiKey or VILAO_API_KEY)');
@@ -203,6 +243,10 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     model: modelToUse,
     messages: messages,
     max_tokens: maxTokens,
+    // Xin phản hồi JSON ĐƠN. Model 'ts/*' bên Vilao mặc định trả SSE streaming (chat.completion.chunk)
+    // ⇒ JSON.parse cả cục hỏng. Đặt tường minh stream:false; nếu endpoint vẫn stream thì parseVilaoBody
+    // ở dưới tự gộp SSE (lưới an toàn). stream:false là mặc định OpenAI nên an toàn với mọi provider.
+    stream: false,
   };
 
   // Ép JSON mode khi có ảnh (kể cả useReasoning): output ảnh luôn là JSON, và nếu tắt JSON mode
@@ -275,7 +319,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
 
       let data;
       try {
-        data = JSON.parse(dataText);
+        data = parseVilaoBody(dataText);
       } catch (e) {
         throw new Error("Failed to parse Vilao response: " + dataText.substring(0, 100));
       }
