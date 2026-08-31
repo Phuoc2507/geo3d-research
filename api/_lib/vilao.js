@@ -25,8 +25,8 @@ const PROVIDERS = {
   vilao: {
     chatUrl:  'https://api.vilao.ai/v1/chat/completions',
     apiKeyEnv: 'VILAO_API_KEY',
-    textModel:   process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
-    visionModel: process.env.VILAO_MODEL || 'ram/gemini-3.5-flash-low',
+    textModel:   process.env.VILAO_MODEL || 'ts/gemini-3.1-flash-lite',
+    visionModel: process.env.VILAO_MODEL || 'ts/gemini-3.1-flash-lite',
   },
 };
 

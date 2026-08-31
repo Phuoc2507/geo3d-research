@@ -14,7 +14,7 @@ function extractJson(raw) {
 
 // Đề tiếng Việt → Plan JSON hợp lệ (đã validate bằng schema của engine).
 // Model dịch có thể đổi qua env VILAO_TRANSLATOR_MODEL; mặc định gemini-flash (nhanh/rẻ).
-const TRANSLATOR_MODEL = process.env.VILAO_TRANSLATOR_MODEL || 'ram/gemini-3.5-flash-low';
+const TRANSLATOR_MODEL = process.env.VILAO_TRANSLATOR_MODEL || 'ts/gemini-3.1-flash-lite';
 
 // Timeout MẶC ĐỊNH cho bước dịch. Đo thực tế: 5–10s/đề (cả gemini lẫn claude). Đặt 25s = thừa đệm.
 // KHÔNG dùng mặc định 180s của callVilao: khi engine là bước THỬ TRƯỚC rồi mới rơi về luồng cũ,
