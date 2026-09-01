@@ -1,5 +1,6 @@
 import https from 'https';
 import { ensureVertexAccessToken } from './vertexAuth.js';
+import { getActiveKeyPool } from './llmKeyStore.js';
 
 // ── Provider registry ───────────────────────────────────────────────────────
 // Cả tầng LLM dùng chung format OpenAI (/chat/completions). Đổi provider CHÍNH chỉ bằng MỘT biến môi
@@ -239,7 +240,11 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
       // Vertex: token OAuth sống ~60' — mint/refresh từ khoá SA (VERTEX_SA_KEY_JSON) theo tiến trình.
       apiKeyCandidates = [await ensureVertexAccessToken()];
     } else {
-      apiKeyCandidates = resolveApiKeyCandidates(prov.apiKeyEnv);
+      // Khoá đổi-lúc-chạy (bảng llm_api_keys) ƯU TIÊN, rồi khoá env làm LƯỚI AN TOÀN cuối. getActiveKeyPool
+      // không bao giờ throw (chưa cấu hình DB / lỗi ⇒ []), nên Supabase trục trặc thì vẫn chạy bằng env.
+      const envKeys = resolveApiKeyCandidates(prov.apiKeyEnv);
+      const dbKeys = await getActiveKeyPool(prov.apiKeyEnv);
+      apiKeyCandidates = [...new Set([...dbKeys, ...envKeys])];
     }
     if (!apiKeyCandidates.length) {
       throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
