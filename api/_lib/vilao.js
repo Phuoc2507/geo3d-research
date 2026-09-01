@@ -171,15 +171,29 @@ export function resolveApiKey(options = {}, envKey = process.env.VILAO_API_KEY) 
 }
 
 /**
- * Khoá của provider theo THỨ TỰ ưu tiên: khoá CHÍNH (<apiKeyEnv>) rồi khoá DỰ PHÒNG (<apiKeyEnv>_BACKUP).
- * Khi khoá chính hỏng (bị thu hồi / hết quota / lỗi), callVilao tự chuyển sang khoá dự phòng.
- * Lọc rỗng + khử trùng (nếu ai đó đặt trùng thì không thử 2 lần vô ích). Đọc TƯƠI mỗi lần (đổi env
- * lúc chạy — vd xoay khoá — có hiệu lực ngay). Ví dụ env: VILAO_API_KEY (chính) + VILAO_API_KEY_BACKUP.
+ * Khoá của provider theo THỨ TỰ ưu tiên: khoá CHÍNH (<apiKeyEnv>) rồi các khoá DỰ PHÒNG (<apiKeyEnv>_BACKUP).
+ * Khi khoá chính hỏng vì LỖI KHOÁ (401/403 bị thu hồi/sai, 429 hết quota), callVilao tự chuyển khoá tiếp.
+ * MỖI biến có thể chứa NHIỀU khoá ngăn bằng dấu phẩy / xuống dòng / khoảng trắng (nhiều key dự phòng chỉ
+ * cần 1 biến): VILAO_API_KEY_BACKUP="sk-b1, sk-b2, sk-b3". Lọc rỗng + khử trùng, đọc TƯƠI mỗi lần.
  */
 export function resolveApiKeyCandidates(apiKeyEnv, env = process.env) {
-  const raw = [env[apiKeyEnv], env[`${apiKeyEnv}_BACKUP`]];
-  const cleaned = raw.map((k) => (k || '').trim()).filter(Boolean);
-  return [...new Set(cleaned)];
+  const split = (v) => (v || '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  const list = [...split(env[apiKeyEnv]), ...split(env[`${apiKeyEnv}_BACKUP`])];
+  return [...new Set(list)];   // Set giữ THỨ TỰ chèn: chính trước, dự phòng sau
+}
+
+/**
+ * Lỗi này có phải "lỗi KHOÁ" (đáng chuyển sang khoá dự phòng) không? — 401/403 (khoá sai/bị thu hồi),
+ * 429 (hết quota / rate limit). KHÔNG tính timeout / mạng / 5xx: khoá khác trên CÙNG endpoint không cứu
+ * được, và thử thêm dễ vượt trần thời gian của Vercel. statusCode gắn sẵn ở lỗi API; soi thêm message dự phòng.
+ */
+export function isKeyError(err) {
+  if (!err) return false;
+  const code = Number(err.statusCode);
+  if (code === 401 || code === 403 || code === 429) return true;
+  const msg = (err.message || '').toLowerCase();
+  if (/\b(401|403|429)\b/.test(msg)) return true;
+  return /unauthorized|forbidden|invalid api key|quota|rate limit|insufficient_quota|exceeded your/.test(msg);
 }
 
 export async function callVilao(systemPrompt, userPrompt, options = {}) {
@@ -320,7 +334,9 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
             continue;
           }
 
-          throw new Error("Vilao API error: " + response.statusCode + " " + errorText);
+          const apiErr = new Error("Vilao API error: " + response.statusCode + " " + errorText);
+          apiErr.statusCode = response.statusCode;   // để isKeyError phân biệt lỗi khoá (401/403/429)
+          throw apiErr;
         }
 
         let dataText = '';
@@ -368,16 +384,17 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     throw new Error('Vilao failed after maximum retries');
   }
 
-  // Thử khoá CHÍNH; khoá này hỏng (đã hết retry nội bộ) → chuyển sang khoá DỰ PHÒNG (nếu có). Chỉ ném
-  // khi TẤT CẢ khoá đều hỏng. (Danh sách chỉ có 1 khoá với tab test / Vertex → hành vi y như trước.)
+  // Thử khoá CHÍNH; CHỈ khi lỗi thuộc về KHOÁ (401/403/429) mới chuyển sang khoá DỰ PHÒNG kế tiếp —
+  // timeout/mạng/5xx thì KHÔNG chuyển (khoá khác trên cùng endpoint không cứu được + tránh vượt trần
+  // thời gian Vercel). Danh sách chỉ 1 khoá (tab test / Vertex) → hành vi y như trước.
   let lastError = null;
   for (let ki = 0; ki < apiKeyCandidates.length; ki++) {
     try {
       return await sendWithKey(apiKeyCandidates[ki]);
     } catch (err) {
       lastError = err;
-      if (ki < apiKeyCandidates.length - 1) {
-        console.warn(`[llm] khoá #${ki + 1} hỏng (${err?.message || err}) → thử khoá dự phòng`);
+      if (ki < apiKeyCandidates.length - 1 && isKeyError(err)) {
+        console.warn(`[llm] khoá #${ki + 1} lỗi khoá/quota (${err?.message || err}) → thử khoá dự phòng`);
         continue;
       }
       throw err;
