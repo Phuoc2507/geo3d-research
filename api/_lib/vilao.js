@@ -1,6 +1,7 @@
 import https from 'https';
 import { ensureVertexAccessToken } from './vertexAuth.js';
 import { getActiveKeyPool } from './llmKeyStore.js';
+import { redactSecrets } from './urlGuard.js';
 
 // ── Provider registry ───────────────────────────────────────────────────────
 // Cả tầng LLM dùng chung format OpenAI (/chat/completions). Đổi provider CHÍNH chỉ bằng MỘT biến môi
@@ -330,7 +331,11 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           response.on('data', chunk => errorText += chunk);
           await new Promise(r => response.on('end', r));
 
-          console.error('Vilao error:', response.statusCode, errorText);
+          // Body lỗi của nhà cung cấp thường vọng lại chính khoá vừa gửi (vd 401 "Incorrect API key:
+          // sk-..."). Che TRƯỚC khi ghi log Vercel và trước khi ghép vào message lỗi (message này
+          // đi tiếp ra tận trình duyệt admin ở tab Test API Key), và cắt ngắn cho khỏi ngập log.
+          const safeErrText = redactSecrets(errorText).slice(0, 500);
+          console.error('Vilao error:', response.statusCode, safeErrText);
 
           if ([502, 503, 504].includes(response.statusCode) && attempt < maxAttempts - 1) {
             console.warn("Vilao " + response.statusCode + ", retry attempt " + attempt);
@@ -339,7 +344,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
             continue;
           }
 
-          const apiErr = new Error("Vilao API error: " + response.statusCode + " " + errorText);
+          const apiErr = new Error("Vilao API error: " + response.statusCode + " " + safeErrText);
           apiErr.statusCode = response.statusCode;   // để isKeyError phân biệt lỗi khoá (401/403/429)
           throw apiErr;
         }
@@ -357,7 +362,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
         try {
           data = parseVilaoBody(dataText);
         } catch (e) {
-          throw new Error("Failed to parse Vilao response: " + dataText.substring(0, 100));
+          throw new Error("Failed to parse Vilao response: " + redactSecrets(dataText.substring(0, 100)));
         }
 
         if (isEmptyVilaoContent(data)) {
@@ -377,7 +382,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
 
       } catch (err) {
         if (isNetworkError(err) && attempt < maxAttempts - 1) {
-          console.warn("Vilao network error: " + err.message + ", retry attempt " + attempt);
+          console.warn("Vilao network error: " + redactSecrets(err.message) + ", retry attempt " + attempt);
           await sleepMs(1000 * attempt);
           attempt++;
           continue;
@@ -413,7 +418,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
         ? ki + 1                                                     // lỗi khoá → khoá kế (bất kể đích)
         : candidates.findIndex((c, idx) => idx > ki && targetSig(c) !== targetSig(cand));  // khác đích
       if (nextKi < 0 || nextKi >= candidates.length) throw err;
-      console.warn(`[llm] ứng viên #${ki + 1} lỗi (${err?.message || err}) → thử #${nextKi + 1}${isKeyError(err) ? ' (lỗi khoá)' : ' (đổi endpoint/model)'}`);
+      console.warn(`[llm] ứng viên #${ki + 1} lỗi (${redactSecrets(err?.message || String(err))}) → thử #${nextKi + 1}${isKeyError(err) ? ' (lỗi khoá)' : ' (đổi endpoint/model)'}`);
       ki = nextKi;
     }
   }
