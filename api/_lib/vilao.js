@@ -389,10 +389,12 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   }
 
   // Thử lần lượt các ứng viên. Chọn ứng viên KẾ theo LOẠI lỗi:
-  //   • lỗi KHOÁ (401/403/429): thử NGAY khoá kế (có thể chỉ mình khoá đó hỏng — kể cả cùng nhà cung cấp).
-  //   • timeout/mạng/5xx: chỉ nhảy sang ứng viên KHÁC NHÀ CUNG CẤP (khác url) — cùng nhà thì vô ích, và
-  //     nhà khác (model khác) có thể đang khoẻ. Bỏ qua các ứng viên cùng url còn lại.
+  //   • lỗi KHOÁ (401/403/429): thử NGAY khoá kế (có thể chỉ mình khoá đó hỏng — kể cả cùng endpoint+model).
+  //   • timeout/mạng/5xx: nhảy sang ứng viên có ĐÍCH KHÁC (khác endpoint HOẶC khác model) — cùng nhà cung
+  //     cấp nhưng khác model (vd mn/ag/gemini-3.6-flash-high ↔ anxs/gemini-3.7-flash-high) vẫn đáng thử vì
+  //     model kia có thể đang khoẻ. Bỏ qua ứng viên TRÙNG HỆT đích (cùng endpoint + model → vô ích).
   // Ngân sách CẢ vòng ≤ ~52s (chừa lằn maxDuration 60s của Vercel) để không bao giờ 504 vì thử quá nhiều.
+  const targetSig = (c) => `${c.url}|${c.model}`;   // "đích" = endpoint + model
   const OVERALL_CAP_MS = Math.min(52000, Math.max(timeoutMs, (timeoutMs || 0) + 22000));
   const MIN_ATTEMPT_MS = 6000;
   const startAll = Date.now();
@@ -408,10 +410,10 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     } catch (err) {
       lastError = err;
       const nextKi = isKeyError(err)
-        ? ki + 1                                                     // lỗi khoá → khoá kế (bất kể nhà nào)
-        : candidates.findIndex((c, idx) => idx > ki && c.url !== cand.url);  // khác → nhà cung cấp khác
+        ? ki + 1                                                     // lỗi khoá → khoá kế (bất kể đích)
+        : candidates.findIndex((c, idx) => idx > ki && targetSig(c) !== targetSig(cand));  // khác đích
       if (nextKi < 0 || nextKi >= candidates.length) throw err;
-      console.warn(`[llm] ứng viên #${ki + 1} lỗi (${err?.message || err}) → thử #${nextKi + 1}${isKeyError(err) ? ' (lỗi khoá)' : ' (đổi nhà cung cấp)'}`);
+      console.warn(`[llm] ứng viên #${ki + 1} lỗi (${err?.message || err}) → thử #${nextKi + 1}${isKeyError(err) ? ' (lỗi khoá)' : ' (đổi endpoint/model)'}`);
       ki = nextKi;
     }
   }
