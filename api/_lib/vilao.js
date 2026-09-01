@@ -170,6 +170,18 @@ export function resolveApiKey(options = {}, envKey = process.env.VILAO_API_KEY) 
   return key;
 }
 
+/**
+ * Khoá của provider theo THỨ TỰ ưu tiên: khoá CHÍNH (<apiKeyEnv>) rồi khoá DỰ PHÒNG (<apiKeyEnv>_BACKUP).
+ * Khi khoá chính hỏng (bị thu hồi / hết quota / lỗi), callVilao tự chuyển sang khoá dự phòng.
+ * Lọc rỗng + khử trùng (nếu ai đó đặt trùng thì không thử 2 lần vô ích). Đọc TƯƠI mỗi lần (đổi env
+ * lúc chạy — vd xoay khoá — có hiệu lực ngay). Ví dụ env: VILAO_API_KEY (chính) + VILAO_API_KEY_BACKUP.
+ */
+export function resolveApiKeyCandidates(apiKeyEnv, env = process.env) {
+  const raw = [env[apiKeyEnv], env[`${apiKeyEnv}_BACKUP`]];
+  const cleaned = raw.map((k) => (k || '').trim()).filter(Boolean);
+  return [...new Set(cleaned)];
+}
+
 export async function callVilao(systemPrompt, userPrompt, options = {}) {
   const {
     maxTokens = 4096,
@@ -198,22 +210,24 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   //    khác nhau và cả app chỉ có MỘT model logic ("flash rẻ"); đổi model theo provider qua GEMINI_MODEL /
   //    GEMINI_VISION_MODEL (hoặc VILAO_MODEL). `aiModel`/`useReasoning` không còn đổi model (giữ tham số cho
   //    tương thích; `useReasoning` vẫn chỉ tác động cờ JSON mode bên dưới).
-  let chatUrl, currentApiKey, modelToUse;
+  // apiKeyCandidates: danh sách khoá THỬ THEO THỨ TỰ — khoá CHÍNH rồi khoá DỰ PHÒNG (nếu có). Chỉ áp
+  // cho đường dùng khoá env của provider (khoá tường minh của tab test / token Vertex KHÔNG có dự phòng).
+  let chatUrl, modelToUse, apiKeyCandidates;
   if (apiKey) {
     const prov = provider ? PROVIDERS[provider] : null;
     chatUrl = baseUrl || prov?.chatUrl || PROVIDERS.vilao.chatUrl;   // mặc định Vilao (giữ hành vi cũ)
-    currentApiKey = apiKey;
     modelToUse = model || prov?.textModel || VILAO_MODEL;
+    apiKeyCandidates = [apiKey];
   } else {
     const prov = activeProvider();
     chatUrl = prov.chatUrl;
     if (chatUrl.includes('aiplatform.googleapis.com')) {
       // Vertex: token OAuth sống ~60' — mint/refresh từ khoá SA (VERTEX_SA_KEY_JSON) theo tiến trình.
-      currentApiKey = await ensureVertexAccessToken();
+      apiKeyCandidates = [await ensureVertexAccessToken()];
     } else {
-      currentApiKey = process.env[prov.apiKeyEnv];
+      apiKeyCandidates = resolveApiKeyCandidates(prov.apiKeyEnv);
     }
-    if (!currentApiKey) {
+    if (!apiKeyCandidates.length) {
       throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
     }
     modelToUse = imageBase64 ? prov.visionModel : prov.textModel;
@@ -275,83 +289,101 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     bodyObj.reasoning_effort = vertexEffort;
   }
 
-  let attempt = 0;
-
-  while (attempt < maxAttempts) {
-    try {
-      const bodyData = JSON.stringify(bodyObj);
-      const requestOptions = {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': "Bearer " + currentApiKey,
-          'Content-Length': Buffer.byteLength(bodyData)
-        }
-      };
-
-      const response = await httpsRequest(chatUrl, requestOptions, bodyData, timeoutMs);
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        let errorText = '';
-        response.on('data', chunk => errorText += chunk);
-        await new Promise(r => response.on('end', r));
-
-        console.error('Vilao error:', response.statusCode, errorText);
-
-        if ([502, 503, 504].includes(response.statusCode) && attempt < maxAttempts - 1) {
-          console.warn("Vilao " + response.statusCode + ", retry attempt " + attempt);
-          await sleepMs(500 * attempt);
-          attempt++;
-          continue;
-        }
-
-        throw new Error("Vilao API error: " + response.statusCode + " " + errorText);
-      }
-
-      let dataText = '';
-      for await (const chunk of response) {
-        const text = chunk.toString();
-        dataText += text;
-        if (onStream) {
-          onStream(text);
-        }
-      }
-
-      let data;
+  // Gửi 1 request bằng MỘT khoá cụ thể, kèm vòng retry nội bộ (network/5xx/empty). Ném khi hết lượt.
+  async function sendWithKey(keyToUse) {
+    let attempt = 0;
+    while (attempt < maxAttempts) {
       try {
-        data = parseVilaoBody(dataText);
-      } catch (e) {
-        throw new Error("Failed to parse Vilao response: " + dataText.substring(0, 100));
-      }
+        const bodyData = JSON.stringify(bodyObj);
+        const requestOptions = {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': "Bearer " + keyToUse,
+            'Content-Length': Buffer.byteLength(bodyData)
+          }
+        };
 
-      if (isEmptyVilaoContent(data)) {
-        // Content rỗng/thiếu = lỗi TẠM ⇒ retry giống 5xx (đừng fail thẳng thành "Lỗi vẽ hình").
-        // maxAttempts=1 (caller đã hedge) ⇒ 0<0 sai ⇒ ném ngay, để hedge/caller lo — không chồng retry.
-        if (attempt < maxAttempts - 1) {
-          console.warn("Vilao empty content, retry attempt " + attempt);
-          await sleepMs(500 * attempt);
+        const response = await httpsRequest(chatUrl, requestOptions, bodyData, timeoutMs);
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          let errorText = '';
+          response.on('data', chunk => errorText += chunk);
+          await new Promise(r => response.on('end', r));
+
+          console.error('Vilao error:', response.statusCode, errorText);
+
+          if ([502, 503, 504].includes(response.statusCode) && attempt < maxAttempts - 1) {
+            console.warn("Vilao " + response.statusCode + ", retry attempt " + attempt);
+            await sleepMs(500 * attempt);
+            attempt++;
+            continue;
+          }
+
+          throw new Error("Vilao API error: " + response.statusCode + " " + errorText);
+        }
+
+        let dataText = '';
+        for await (const chunk of response) {
+          const text = chunk.toString();
+          dataText += text;
+          if (onStream) {
+            onStream(text);
+          }
+        }
+
+        let data;
+        try {
+          data = parseVilaoBody(dataText);
+        } catch (e) {
+          throw new Error("Failed to parse Vilao response: " + dataText.substring(0, 100));
+        }
+
+        if (isEmptyVilaoContent(data)) {
+          // Content rỗng/thiếu = lỗi TẠM ⇒ retry giống 5xx (đừng fail thẳng thành "Lỗi vẽ hình").
+          // maxAttempts=1 (caller đã hedge) ⇒ 0<0 sai ⇒ ném ngay, để hedge/caller lo — không chồng retry.
+          if (attempt < maxAttempts - 1) {
+            console.warn("Vilao empty content, retry attempt " + attempt);
+            await sleepMs(500 * attempt);
+            attempt++;
+            continue;
+          }
+          throw new Error('Vilao returned empty content');
+        }
+        if (returnRaw) {
+          return { content: data.choices[0].message.content, usage: data.usage || null, model: modelToUse };
+        }
+        return data.choices[0].message.content;
+
+      } catch (err) {
+        if (isNetworkError(err) && attempt < maxAttempts - 1) {
+          console.warn("Vilao network error: " + err.message + ", retry attempt " + attempt);
+          await sleepMs(1000 * attempt);
           attempt++;
           continue;
         }
-        throw new Error('Vilao returned empty content');
+        throw err;
       }
-      if (returnRaw) {
-        return { content: data.choices[0].message.content, usage: data.usage || null, model: modelToUse };
-      }
-      return data.choices[0].message.content;
+    }
+    throw new Error('Vilao failed after maximum retries');
+  }
 
+  // Thử khoá CHÍNH; khoá này hỏng (đã hết retry nội bộ) → chuyển sang khoá DỰ PHÒNG (nếu có). Chỉ ném
+  // khi TẤT CẢ khoá đều hỏng. (Danh sách chỉ có 1 khoá với tab test / Vertex → hành vi y như trước.)
+  let lastError = null;
+  for (let ki = 0; ki < apiKeyCandidates.length; ki++) {
+    try {
+      return await sendWithKey(apiKeyCandidates[ki]);
     } catch (err) {
-      if (isNetworkError(err) && attempt < maxAttempts - 1) {
-        console.warn("Vilao network error: " + err.message + ", retry attempt " + attempt);
-        await sleepMs(1000 * attempt);
-        attempt++;
+      lastError = err;
+      if (ki < apiKeyCandidates.length - 1) {
+        console.warn(`[llm] khoá #${ki + 1} hỏng (${err?.message || err}) → thử khoá dự phòng`);
         continue;
       }
       throw err;
     }
   }
-
-  throw new Error('Vilao failed after maximum retries');
+  throw lastError || new Error('Vilao failed after maximum retries');
 }
 
 // HEDGE TRỄ: chạy fn() một lần; nếu sau delayMs vẫn chưa xong thì bắn THÊM 1 lượt song song,
