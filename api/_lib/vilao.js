@@ -225,31 +225,40 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   //    khác nhau và cả app chỉ có MỘT model logic ("flash rẻ"); đổi model theo provider qua GEMINI_MODEL /
   //    GEMINI_VISION_MODEL (hoặc VILAO_MODEL). `aiModel`/`useReasoning` không còn đổi model (giữ tham số cho
   //    tương thích; `useReasoning` vẫn chỉ tác động cờ JSON mode bên dưới).
-  // apiKeyCandidates: danh sách khoá THỬ THEO THỨ TỰ — khoá CHÍNH rồi khoá DỰ PHÒNG (nếu có). Chỉ áp
-  // cho đường dùng khoá env của provider (khoá tường minh của tab test / token Vertex KHÔNG có dự phòng).
-  let chatUrl, modelToUse, apiKeyCandidates;
+  // candidates: danh sách ỨNG VIÊN thử theo THỨ TỰ, mỗi ứng viên MANG endpoint (url) + model RIÊNG →
+  // khoá dự phòng có thể là NHÀ CUNG CẤP KHÁC + MODEL KHÁC. Ứng viên không khai url/model ⇒ dùng mặc định
+  // của provider đang chạy. defaultUrl/defaultModel = endpoint+model mặc định.
+  let defaultUrl, defaultModel, candidates;
   if (apiKey) {
+    // Khoá tường minh (tab test / override): 1 ứng viên, không dự phòng.
     const prov = provider ? PROVIDERS[provider] : null;
-    chatUrl = baseUrl || prov?.chatUrl || PROVIDERS.vilao.chatUrl;   // mặc định Vilao (giữ hành vi cũ)
-    modelToUse = model || prov?.textModel || VILAO_MODEL;
-    apiKeyCandidates = [apiKey];
+    defaultUrl = baseUrl || prov?.chatUrl || PROVIDERS.vilao.chatUrl;
+    defaultModel = model || prov?.textModel || VILAO_MODEL;
+    candidates = [{ apiKey, url: defaultUrl, model: defaultModel }];
   } else {
     const prov = activeProvider();
-    chatUrl = prov.chatUrl;
-    if (chatUrl.includes('aiplatform.googleapis.com')) {
-      // Vertex: token OAuth sống ~60' — mint/refresh từ khoá SA (VERTEX_SA_KEY_JSON) theo tiến trình.
-      apiKeyCandidates = [await ensureVertexAccessToken()];
+    defaultUrl = prov.chatUrl;
+    defaultModel = imageBase64 ? prov.visionModel : prov.textModel;
+    if (defaultUrl.includes('aiplatform.googleapis.com')) {
+      // Vertex: token OAuth (mint/refresh từ VERTEX_SA_KEY_JSON) — 1 ứng viên, không pool.
+      candidates = [{ apiKey: await ensureVertexAccessToken(), url: defaultUrl, model: defaultModel }];
     } else {
-      // Khoá đổi-lúc-chạy (bảng llm_api_keys) ƯU TIÊN, rồi khoá env làm LƯỚI AN TOÀN cuối. getActiveKeyPool
-      // không bao giờ throw (chưa cấu hình DB / lỗi ⇒ []), nên Supabase trục trặc thì vẫn chạy bằng env.
-      const envKeys = resolveApiKeyCandidates(prov.apiKeyEnv);
-      const dbKeys = await getActiveKeyPool(prov.apiKeyEnv);
-      apiKeyCandidates = [...new Set([...dbKeys, ...envKeys])];
+      // Pool đổi-lúc-chạy (bảng llm_api_keys) ƯU TIÊN, rồi khoá env làm LƯỚI AN TOÀN cuối. getActiveKeyPool
+      // KHÔNG BAO GIỜ throw (chưa cấu hình DB / lỗi ⇒ []) → Supabase trục trặc vẫn chạy bằng env.
+      const dbPool = await getActiveKeyPool(prov.apiKeyEnv);                    // [{apiKey, url, model}]
+      const envKeys = resolveApiKeyCandidates(prov.apiKeyEnv).map((k) => ({ apiKey: k, url: null, model: null }));
+      const seen = new Set();
+      candidates = [];
+      for (const c of [...dbPool, ...envKeys]) {
+        const ak = String(c.apiKey || '').trim();
+        if (!ak || seen.has(ak)) continue;                                     // khử trùng theo giá trị khoá
+        seen.add(ak);
+        candidates.push({ apiKey: ak, url: c.url || defaultUrl, model: c.model || defaultModel });
+      }
     }
-    if (!apiKeyCandidates.length) {
+    if (!candidates.length) {
       throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
     }
-    modelToUse = imageBase64 ? prov.visionModel : prov.textModel;
   }
 
   const messages = [];
@@ -272,44 +281,35 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     messages.push({ role: 'user', content: userPrompt });
   }
 
-  const bodyObj = {
-    model: modelToUse,
-    messages: messages,
-    max_tokens: maxTokens,
-    // Xin phản hồi JSON ĐƠN. Model 'ts/*' bên Vilao mặc định trả SSE streaming (chat.completion.chunk)
-    // ⇒ JSON.parse cả cục hỏng. Đặt tường minh stream:false; nếu endpoint vẫn stream thì parseVilaoBody
-    // ở dưới tự gộp SSE (lưới an toàn). stream:false là mặc định OpenAI nên an toàn với mọi provider.
-    stream: false,
-  };
-
-  // Ép JSON mode khi có ảnh (kể cả useReasoning): output ảnh luôn là JSON, và nếu tắt JSON mode
-  // thì phần transcription đề bài (free-text nhiều dòng) dễ chứa ký tự chưa escape làm hỏng cả JSON.
-  // useReasoning ở đây chỉ đổi cờ này chứ không đổi model, nên bật lại an toàn.
-  if ((!useReasoning || imageBase64) && modelToUse !== 'ox/o1-mini') {
-    bodyObj.response_format = { type: 'json_object' };
+  // Dựng body cho MỘT ứng viên (model + url riêng): JSON mode + reasoning_effort tuỳ endpoint.
+  function buildBody(mdl, url) {
+    const body = {
+      model: mdl,
+      messages: messages,
+      max_tokens: maxTokens,
+      // stream:false tường minh — model 'ts/*' Vilao mặc định SSE; parseVilaoBody vẫn gộp SSE (lưới an toàn).
+      stream: false,
+    };
+    // Ép JSON mode khi có ảnh (transcription free-text dễ làm hỏng JSON nếu tắt).
+    if ((!useReasoning || imageBase64) && mdl !== 'ox/o1-mini') {
+      body.response_format = { type: 'json_object' };
+    }
+    // reasoning_effort CHỈ cho endpoint Google (Gemini AI Studio / Vertex). reasoningEffort per-call > env.
+    const callEffort = (reasoningEffort || '').trim();
+    const geminiEffort = callEffort || (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
+    if (url.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
+      body.reasoning_effort = geminiEffort;
+    }
+    const vertexEffort = callEffort || (process.env.VERTEX_REASONING_EFFORT || '').trim();
+    if (url.includes('aiplatform.googleapis.com') && vertexEffort && vertexEffort !== 'default') {
+      body.reasoning_effort = vertexEffort;
+    }
+    return body;
   }
 
-  // GIỚI HẠN suy luận cho Gemini: Flash bật "thinking" động (ngốn tới ~24K token nghĩ ⇒ chậm/timeout).
-  // reasoning_effort: 'low'~1K, 'medium'~8K, 'high'~24K, 'none' tắt hẳn. Mặc định 'low' cho nhanh mà vẫn
-  // đủ suy luận cho hình học; đổi qua GEMINI_REASONING_EFFORT ('none' rẻ/nhanh nhất, 'high' kỹ hơn).
-  // CHỈ áp cho endpoint Gemini — provider khác (Vilao) không hiểu tham số này. 'default' = để model tự quyết.
-  // reasoningEffort truyền theo LỜI GỌI ưu tiên hơn env dùng chung (bước dịch Lý/Hóa ép 'low' → nhanh,
-  // hết timeout — mà KHÔNG đổi reasoning của luồng Toán vì Toán không truyền tham số này).
-  const callEffort = (reasoningEffort || '').trim();
-  const geminiEffort = callEffort || (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
-  if (chatUrl.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
-    bodyObj.reasoning_effort = geminiEffort;
-  }
-  // Vertex (aiplatform) OpenAI-compat cũng nhận reasoning_effort cho Gemini 2.5+, NHƯNG mặc định TẮT khi
-  // KHÔNG có override per-call lẫn env (chỉ gửi khi được yêu cầu tường minh) để tránh rủi ro endpoint từ
-  // chối tham số. Bước dịch Lý/Hóa truyền reasoningEffort='low' ⇒ Vertex cũng chạy nhanh, hết timeout.
-  const vertexEffort = callEffort || (process.env.VERTEX_REASONING_EFFORT || '').trim();
-  if (chatUrl.includes('aiplatform.googleapis.com') && vertexEffort && vertexEffort !== 'default') {
-    bodyObj.reasoning_effort = vertexEffort;
-  }
-
-  // Gửi 1 request bằng MỘT khoá cụ thể, kèm vòng retry nội bộ (network/5xx/empty). Ném khi hết lượt.
-  async function sendWithKey(keyToUse) {
+  // Gửi 1 request bằng MỘT ứng viên (endpoint+model+khoá riêng), kèm retry nội bộ (network/5xx/empty).
+  async function sendWithKey(cand, candTimeout) {
+    const bodyObj = buildBody(cand.model, cand.url);
     let attempt = 0;
     while (attempt < maxAttempts) {
       try {
@@ -318,12 +318,12 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': "Bearer " + keyToUse,
+            'Authorization': "Bearer " + cand.apiKey,
             'Content-Length': Buffer.byteLength(bodyData)
           }
         };
 
-        const response = await httpsRequest(chatUrl, requestOptions, bodyData, timeoutMs);
+        const response = await httpsRequest(cand.url, requestOptions, bodyData, candTimeout);
 
         if (response.statusCode < 200 || response.statusCode >= 300) {
           let errorText = '';
@@ -362,7 +362,6 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
 
         if (isEmptyVilaoContent(data)) {
           // Content rỗng/thiếu = lỗi TẠM ⇒ retry giống 5xx (đừng fail thẳng thành "Lỗi vẽ hình").
-          // maxAttempts=1 (caller đã hedge) ⇒ 0<0 sai ⇒ ném ngay, để hedge/caller lo — không chồng retry.
           if (attempt < maxAttempts - 1) {
             console.warn("Vilao empty content, retry attempt " + attempt);
             await sleepMs(500 * attempt);
@@ -372,7 +371,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           throw new Error('Vilao returned empty content');
         }
         if (returnRaw) {
-          return { content: data.choices[0].message.content, usage: data.usage || null, model: modelToUse };
+          return { content: data.choices[0].message.content, usage: data.usage || null, model: cand.model };
         }
         return data.choices[0].message.content;
 
@@ -389,20 +388,31 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     throw new Error('Vilao failed after maximum retries');
   }
 
-  // Thử khoá CHÍNH; CHỈ khi lỗi thuộc về KHOÁ (401/403/429) mới chuyển sang khoá DỰ PHÒNG kế tiếp —
-  // timeout/mạng/5xx thì KHÔNG chuyển (khoá khác trên cùng endpoint không cứu được + tránh vượt trần
-  // thời gian Vercel). Danh sách chỉ 1 khoá (tab test / Vertex) → hành vi y như trước.
+  // Thử lần lượt các ứng viên. Chọn ứng viên KẾ theo LOẠI lỗi:
+  //   • lỗi KHOÁ (401/403/429): thử NGAY khoá kế (có thể chỉ mình khoá đó hỏng — kể cả cùng nhà cung cấp).
+  //   • timeout/mạng/5xx: chỉ nhảy sang ứng viên KHÁC NHÀ CUNG CẤP (khác url) — cùng nhà thì vô ích, và
+  //     nhà khác (model khác) có thể đang khoẻ. Bỏ qua các ứng viên cùng url còn lại.
+  // Ngân sách CẢ vòng ≤ ~52s (chừa lằn maxDuration 60s của Vercel) để không bao giờ 504 vì thử quá nhiều.
+  const OVERALL_CAP_MS = Math.min(52000, Math.max(timeoutMs, (timeoutMs || 0) + 22000));
+  const MIN_ATTEMPT_MS = 6000;
+  const startAll = Date.now();
   let lastError = null;
-  for (let ki = 0; ki < apiKeyCandidates.length; ki++) {
+  let ki = 0;
+  while (ki >= 0 && ki < candidates.length) {
+    const cand = candidates[ki];
+    const remaining = OVERALL_CAP_MS - (Date.now() - startAll);
+    if (ki > 0 && remaining < MIN_ATTEMPT_MS) break;                 // hết ngân sách cho ứng viên sau
+    const candTimeout = ki === 0 ? timeoutMs : Math.min(timeoutMs, remaining);
     try {
-      return await sendWithKey(apiKeyCandidates[ki]);
+      return await sendWithKey(cand, candTimeout);
     } catch (err) {
       lastError = err;
-      if (ki < apiKeyCandidates.length - 1 && isKeyError(err)) {
-        console.warn(`[llm] khoá #${ki + 1} lỗi khoá/quota (${err?.message || err}) → thử khoá dự phòng`);
-        continue;
-      }
-      throw err;
+      const nextKi = isKeyError(err)
+        ? ki + 1                                                     // lỗi khoá → khoá kế (bất kể nhà nào)
+        : candidates.findIndex((c, idx) => idx > ki && c.url !== cand.url);  // khác → nhà cung cấp khác
+      if (nextKi < 0 || nextKi >= candidates.length) throw err;
+      console.warn(`[llm] ứng viên #${ki + 1} lỗi (${err?.message || err}) → thử #${nextKi + 1}${isKeyError(err) ? ' (lỗi khoá)' : ' (đổi nhà cung cấp)'}`);
+      ki = nextKi;
     }
   }
   throw lastError || new Error('Vilao failed after maximum retries');
