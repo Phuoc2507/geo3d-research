@@ -242,6 +242,28 @@ export interface Agent3D {
   radius?: number;
 }
 
+/**
+ * Vật thể thực tế (xe hơi, người, nhà, du thuyền…) — CHỈ để MINH HOẠ bối cảnh đề bài,
+ * KHÔNG tham gia tính toán/kiểm chứng hình học. Ví dụ: đề "ô tô đặt trên đáy khung sắt"
+ * → gắn một prop kind='car' ở tâm đáy để hình giống thực tế.
+ *
+ * Toạ độ theo hệ geo3d (z-up), giống `points`: position=[x,y,z]. Renderer tự đổi sang y-up.
+ * `size` là chiều DÀI mong muốn của vật (đơn vị hình) — model tự co giãn giữ đúng tỉ lệ.
+ */
+export interface RealWorldProp {
+  id: string;
+  /** Loại vật thể. Đợt 1 hỗ trợ 'car'; các loại khác thêm dần. */
+  kind: 'car' | 'person' | 'house' | 'yacht' | 'motorbike';
+  /** Vị trí ĐẶT (thường là điểm chạm đất/đáy của vật), hệ geo3d z-up [x,y,z]. */
+  position: [number, number, number];
+  /** Xoay quanh trục thẳng đứng (độ). Mặc định 0 = đầu xe hướng +x. */
+  rotationY?: number;
+  /** Chiều dài mong muốn của vật theo đơn vị hình (model tự scale theo). Mặc định tuỳ loại. */
+  size?: number;
+  /** Màu thân chính (hex). Mặc định tuỳ loại. */
+  color?: string;
+}
+
 export interface Curve3D extends AdvanceFlags {
   id: string;
   type: 'parabola' | 'cubic' | 'rational' | 'expr';
@@ -390,6 +412,8 @@ export interface GeometryData {
   engineProblem?: string;
   timeline?: AnimationTimeline;
   agents?: Agent3D[];
+  /** Vật thể thực tế minh hoạ bối cảnh (xe/người/nhà/du thuyền…). Thuần trang trí. */
+  props?: RealWorldProp[];
   tags?: string[];
   /** Dạng câu hỏi do bước classify nhận diện (mcq/truefalse/short/essay). Frontend đọc để
    *  tự chọn chế độ giải + hiện badge; người dùng đổi tay được. Vắng ⇒ suy từ heuristic client. */
