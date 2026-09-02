@@ -252,8 +252,8 @@ export interface Agent3D {
  */
 export interface RealWorldProp {
   id: string;
-  /** Loại vật thể. Đợt 1 hỗ trợ 'car'; các loại khác thêm dần. */
-  kind: 'car' | 'person' | 'house' | 'yacht' | 'motorbike';
+  /** Loại vật thể minh hoạ. */
+  kind: 'car' | 'person' | 'house' | 'yacht' | 'motorbike' | 'uav' | 'airplane' | 'tower';
   /** Vị trí ĐẶT (thường là điểm chạm đất/đáy của vật), hệ geo3d z-up [x,y,z]. */
   position: [number, number, number];
   /** Xoay quanh trục thẳng đứng (độ). Mặc định 0 = đầu xe hướng +x. */
