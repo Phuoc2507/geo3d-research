@@ -391,6 +391,9 @@ export interface GeometryData {
   timeline?: AnimationTimeline;
   agents?: Agent3D[];
   tags?: string[];
+  /** Dạng câu hỏi do bước classify nhận diện (mcq/truefalse/short/essay). Frontend đọc để
+   *  tự chọn chế độ giải + hiện badge; người dùng đổi tay được. Vắng ⇒ suy từ heuristic client. */
+  questionType?: QuestionType;
   axisUnit?: string;
   detailLevel?: DetailLevel;
   /** Lời giải đã lưu KÈM hình để tải lại không mất (đề + các bước). import type: không tạo vòng lặp runtime. */
@@ -404,6 +407,9 @@ export interface GeometryData {
 }
 
 export type DetailLevel = 'static' | 'cinematic' | 'step_by_step';
+
+/** Dạng câu hỏi (đề THPT 2025+): trắc nghiệm, đúng/sai, trả lời ngắn, tự luận. */
+export type QuestionType = 'mcq' | 'truefalse' | 'short' | 'essay';
 
 export type QueueItemStatus = 'pending' | 'processing' | 'done' | 'error';
 
