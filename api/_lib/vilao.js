@@ -32,6 +32,23 @@ const PROVIDERS = {
   },
 };
 
+// Nhớ KIỂU AUTH đã dùng được cho từng host gateway (in-memory, theo tiến trình).
+//   'bearer' = header "Authorization: Bearer <key>" (vilao, gemini, đa số).
+//   'raw'    = header "Authorization: <key>" (một số gateway như api.xah.io nhận key TRẦN).
+// Nhờ đó lần đầu tự dò (Bearer → nếu 401/403 thì thử key trần), các lần sau đi thẳng kiểu đúng,
+// để hai loại khoá (vilao + custom) cùng chạy trong pool mà không tốn lượt thử thừa.
+const AUTH_SCHEME_BY_HOST = new Map();
+
+// Host của các nhà cung cấp CHUẨN vốn dùng "Bearer" — KHÔNG dò key trần cho chúng (tránh tốn 1 lượt
+// thử thừa khi khoá 401 vì hỏng thật, và giữ nguyên thứ tự fallback khoá). Chỉ gateway LẠ (vd
+// api.xah.io) mới được thử đổi sang key trần.
+function isBearerOnlyHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === 'api.vilao.ai'
+    || h === 'generativelanguage.googleapis.com'
+    || h.endsWith('aiplatform.googleapis.com');
+}
+
 // Vertex AI (endpoint OpenAI-compat của Google Cloud). KHÁC 'gemini' (AI Studio) ở 2 điểm:
 //   • URL mang PROJECT + LOCATION (region) → tính TƯƠI mỗi lần để nhận biến đặt lúc chạy (không cứng ở
 //     import). location 'global' dùng host 'aiplatform.googleapis.com'; region khác → '<loc>-aiplatform…'.
@@ -311,6 +328,12 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   // Gửi 1 request bằng MỘT ứng viên (endpoint+model+khoá riêng), kèm retry nội bộ (network/5xx/empty).
   async function sendWithKey(cand, candTimeout) {
     const bodyObj = buildBody(cand.model, cand.url);
+    // Kiểu auth cho host này: dùng lại kiểu đã biết chạy, mặc định 'bearer'. Sẽ tự đổi sang 'raw'
+    // (key trần) nếu gateway từ chối Bearer bằng 401/403 (vd api.xah.io).
+    let candHost = '';
+    try { candHost = new URL(cand.url).host; } catch { /* url lạ → bỏ qua cache */ }
+    let authScheme = (candHost && AUTH_SCHEME_BY_HOST.get(candHost)) || 'bearer';
+    let triedRaw = authScheme === 'raw';
     let attempt = 0;
     while (attempt < maxAttempts) {
       try {
@@ -319,7 +342,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': "Bearer " + cand.apiKey,
+            'Authorization': authScheme === 'raw' ? cand.apiKey : ("Bearer " + cand.apiKey),
             'Content-Length': Buffer.byteLength(bodyData)
           }
         };
@@ -337,6 +360,15 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           const safeErrText = redactSecrets(errorText).slice(0, 500);
           console.error('Vilao error:', response.statusCode, safeErrText);
 
+          // Gateway từ chối "Bearer" (401/403) → thử lại NGAY bằng key TRẦN đúng 1 lần (không tăng
+          // attempt: đây là ĐỔI KIỂU AUTH, không phải retry vì flaky). Chạy được thì nhớ ở dưới.
+          if ((response.statusCode === 401 || response.statusCode === 403) && authScheme === 'bearer' && !triedRaw && candHost && !isBearerOnlyHost(candHost)) {
+            authScheme = 'raw';
+            triedRaw = true;
+            console.warn('Auth "Bearer" bị từ chối, thử key trần cho host:', candHost || '(?)');
+            continue;
+          }
+
           if ([502, 503, 504].includes(response.statusCode) && attempt < maxAttempts - 1) {
             console.warn("Vilao " + response.statusCode + ", retry attempt " + attempt);
             await sleepMs(500 * attempt);
@@ -348,6 +380,9 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           apiErr.statusCode = response.statusCode;   // để isKeyError phân biệt lỗi khoá (401/403/429)
           throw apiErr;
         }
+
+        // Status 2xx = kiểu auth này ĐƯỢC chấp nhận → nhớ cho host để lần sau đi thẳng.
+        if (candHost) AUTH_SCHEME_BY_HOST.set(candHost, authScheme);
 
         let dataText = '';
         for await (const chunk of response) {
