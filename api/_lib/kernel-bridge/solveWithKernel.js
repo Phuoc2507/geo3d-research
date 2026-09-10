@@ -23,7 +23,7 @@ const TRANSLATE_TIMEOUT_MS = Number(process.env.VILAO_TRANSLATOR_TIMEOUT_MS) || 
 
 export async function planFromProblem(problem, options = {}) {
   const raw = await callVilao(TRANSLATOR_PROMPT, problem, {
-    model: TRANSLATOR_MODEL,
+    model: options.model || TRANSLATOR_MODEL, // cho phép caller đè model dịch (vd trang demo dùng VILAO_MODEL)
     maxTokens: 4096,
     timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
   });
