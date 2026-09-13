@@ -11,7 +11,7 @@ import { integrate } from './quadrature';
 import { optimizeParam, solveParam, optimizeMulti } from './paramsolve';
 import { recognizeConstant } from './recognize';
 import { fitPoly, evalPoly, derivPoly, extremumOfPoly } from './polyfit';
-import { intersectionVolume, type Solid } from './solids';
+import { intersectionVolume, solidVolume, type Solid } from './solids';
 import { entityTableToGeometryData } from '../entityToGeometry';
 import { buildAnalysisFigure, functionCurves, type FigureInput } from './analysisFigure';
 
@@ -27,14 +27,20 @@ const SolidDeclSchema = z.union([
 const ScalarSource = z.union([
   QueryESchema,
   z.object({ kind: z.literal('expr'), expr: z.string() }),
-  z.object({ kind: z.literal('solid_volume'), of: z.tuple([z.string(), z.string()]), mode: z.literal('intersection') }),
+  // MỘT khối ⇒ thể tích của chính nó; HAI khối + mode:"intersection" ⇒ thể tích phần giao.
+  z.object({ kind: z.literal('solid_volume'), of: z.array(z.string()).min(1).max(2), mode: z.literal('intersection').optional() }),
+  // GỘP các nguồn số (kể cả khối ghép): "thể tích H1 + thể tích H2 = 30".
+  z.object({ kind: z.literal('combine'), op: z.enum(['sum', 'diff']), of: z.array(z.unknown()).min(2).max(12) }),
 ]);
 
 const AnalyzeSchema = z.union([
   z.object({ kind: z.literal('optimize'), parameter: z.string(), sense: z.enum(['max', 'min']), objective: ScalarSource }),
   z.object({
     kind: z.literal('solve'), parameter: z.string(),
-    constraint: z.object({ of: ScalarSource, equals: NumOrExpr }),
+    // `equals` nhận CẢ số/biểu thức LẪN một nguồn số khác: đề kiểu "IA = IB" (tâm mặt cầu ngoại
+    // tiếp, điểm cách đều…) là so HAI đại lượng cùng tính được, không phải so với một hằng số.
+    // Trước đây schema chỉ cho hằng nên các bài đó bị loại ngay từ cửa.
+    constraint: z.object({ of: ScalarSource, equals: z.union([NumOrExpr, ScalarSource]) }),
     report: ScalarSource,
   }),
   z.object({ kind: z.literal('integrate'), variable: z.string(), from: NumOrExpr, to: NumOrExpr, integrand: z.string() }),
@@ -43,7 +49,7 @@ const AnalyzeSchema = z.union([
   z.object({
     kind: z.literal('solve_multi'),
     parameters: z.array(z.string()).min(2),
-    constraints: z.array(z.object({ of: ScalarSource, equals: NumOrExpr })).min(1),
+    constraints: z.array(z.object({ of: ScalarSource, equals: z.union([NumOrExpr, ScalarSource]) })).min(1),
     report: ScalarSource,
   }),
 ]);
@@ -81,6 +87,11 @@ export const AnalysisPlanSchema = RunPlanSchema.extend({
   // hiện đúng đơn vị. Bỏ trống ⇒ hiện số trần. KHÔNG ảnh hưởng phép tính, chỉ khâu hiển thị cuối.
   answerScale: NumOrExpr.optional(),
   answerUnit: z.string().optional(),
+  // LOẠI ĐẠI LƯỢNG của đáp (tuỳ chọn, chỉ cần khi bài ở "thang chữ"): dùng để ghép lại ×a^k —
+  // k = 1 cho độ dài, 2 cho diện tích, 3 cho thể tích. Đây là việc PHÂN LOẠI (LLM đọc đề là biết),
+  // không phải tính toán. Thiếu trường này ở bài thang chữ thì engine KHÔNG đoán: nó đánh dấu đáp
+  // là chưa chứng nhận để hệ từ chối, thay vì trả "9" cho đáp đúng là "9a" (lỗi đã đo trên đề thật).
+  answerKind: z.enum(['distance', 'length', 'slant', 'point_coord', 'area', 'volume', 'sphere_metric', 'ratio']).optional(),
 });
 export type AnalysisPlan = z.infer<typeof AnalysisPlanSchema>;
 
@@ -163,9 +174,9 @@ export function runAnalysis(raw: unknown): AnalysisResult {
   // trị đã đổi đơn vị, (3) nếu không đẹp thì format thập phân gọn, (4) gắn đơn vị. approx = trị đã đổi.
   const answerScale = plan.answerScale != null ? evalExpr(String(plan.answerScale), {}) : 1;
   const answerUnit = plan.answerUnit ? ` ${plan.answerUnit}` : '';
-  const mkAnswer = (val: number) => {
+  const mkAnswer = (val: number, eps?: number) => {
     const display = Number.isFinite(val) ? val * answerScale : val;
-    const nice = Number.isFinite(display) ? recognizeConstant(display) : null;
+    const nice = Number.isFinite(display) ? recognizeConstant(display, eps) : null;
     const num = nice ? nice.text : fmtNum(display);
     return { approx: display, text: num + answerUnit, approximate: !nice };
   };
@@ -230,19 +241,59 @@ export function runAnalysis(raw: unknown): AnalysisResult {
     return { ...g, curves: [...(g.curves ?? []), ...curves] };
   };
 
+  // THAY THAM SỐ ĐÃ GIẢI vào truy vấn. Bài "solve/optimize" khai r,h… của khối tròn xoay theo TÊN
+  // tham số (vd "h"); trước đây truy vấn được đưa thẳng cho engine nên bộ đọc số gặp chữ "h" là ném
+  // ("Cannot parse h") — engine giải ra h rồi mà không dùng được. Đo trên đề thật: 3/116 câu hỏng
+  // đúng vì lẽ đó. Chỉ thay những chuỗi CÓ CHỨA tên tham số; chuỗi hằng ("3*sqrt(2)") giữ nguyên để
+  // không mất tính chính xác của lớp số.
+  const PARAM_SCALAR_KEYS = new Set(['r', 'h', 'R', 's1', 's2']);
+  const numifyQuery = (src: unknown, env: Env): unknown => {
+    if (!src || typeof src !== 'object' || Array.isArray(src)) return src;
+    const o = src as Record<string, unknown>;
+    let changed = false;
+    const out: Record<string, unknown> = { ...o };
+    for (const [k, v] of Object.entries(o)) {
+      if (k === 'of' && Array.isArray(v)) { out.of = v.map((x) => numifyQuery(x, env)); changed = true; continue; }
+      if (!PARAM_SCALAR_KEYS.has(k) || typeof v !== 'string') continue;
+      if (!paramNames.some((n) => new RegExp(`(^|[^A-Za-z0-9_])${n}([^A-Za-z0-9_]|$)`).test(v))) continue;
+      try { out[k] = evalExpr(v, env); changed = true; } catch { /* không thay được thì để nguyên */ }
+    }
+    return changed ? out : src;
+  };
+
   const isExprSrc = (s: unknown): s is { kind: 'expr'; expr: string } =>
     !!s && typeof s === 'object' && (s as { kind?: string }).kind === 'expr';
-  const isSolidVolSrc = (s: unknown): s is { kind: 'solid_volume'; of: [string, string]; mode: 'intersection' } =>
+  const isSolidVolSrc = (s: unknown): s is { kind: 'solid_volume'; of: string[]; mode?: 'intersection' } =>
     !!s && typeof s === 'object' && (s as { kind?: string }).kind === 'solid_volume';
-  const solidVolumeAt = (env: Env, src: { of: [string, string] }): number => {
+  const isCombineSrc = (s: unknown): s is { kind: 'combine'; op: 'sum' | 'diff'; of: unknown[] } =>
+    !!s && typeof s === 'object' && (s as { kind?: string }).kind === 'combine' && Array.isArray((s as { of?: unknown }).of);
+  const solidVolumeAt = (env: Env, src: { of: string[] }): number => {
     const built = buildSolids(env);
-    const a = built[src.of[0]], b = built[src.of[1]];
+    const a = built[src.of[0]];
     if (!a) throw new Error(`Khối "${src.of[0]}" chưa khai báo trong solids`);
+    if (src.of.length === 1) return solidVolume(a);
+    const b = built[src.of[1]];
     if (!b) throw new Error(`Khối "${src.of[1]}" chưa khai báo trong solids`);
     return intersectionVolume(a, b).value;
   };
 
   // Hạ op (hàm→hình học) + thay THAM SỐ (điểm/coeffs/ratio.t…) từ env NHIỀU BIẾN. Dùng cho cả 1-biến lẫn đa-biến.
+  // Bài CÔNG THỨC thuần (nón/trụ/cầu…) không cần dựng hình nên khối dịch để ops rỗng — nhưng
+  // RunPlanSchema đòi ops ≥ 1, thành ra mọi bài như vậy chết ngay ở bước đánh giá truy vấn với
+  // thông báo khó hiểu "constraint lỗi tại tham số". Nhét một điểm giả hợp lệ (giống lớp chuẩn hoá
+  // vẫn làm cho plan hình học) — không ảnh hưởng phép tính vì truy vấn chỉ dùng tham số dạng số.
+  const withPlaceholderOp = (ops: unknown[]): unknown[] =>
+    ops.length > 0 ? ops : [{ op: 'oxyz_point', name: 'O0', at: [0, 0, 0] }];
+
+  // Hình dựng tại nghiệm SỐ chỉ chính xác tới đúng mức bộ giải đạt được. Đòi assert khít hơn thế là
+  // tự mâu thuẫn: bộ giải được phép sai số tới 1e-4 nhưng verifyE lại đòi 1e-6, nên bài giải đúng vẫn
+  // bị báo vi phạm (đo được: "dist(I,MN)=3.000004, expected 3"). Nới dung sai của assert theo residual
+  // thực tế, có sàn — vẫn đủ chặt để bắt mô hình sai thật (những ca đó lệch cỡ 0,1 trở lên).
+  const assertsAtSolution = (resid: number): unknown[] =>
+    plan.asserts.map((a) => (
+      (a as { tolerance?: number }).tolerance != null ? a : { ...a, tolerance: Math.max(1e-6, 10 * Math.abs(resid)) }
+    ));
+
   const concreteOpsEnv = (env: Env): unknown[] => {
     const fitted = fitAt(env).coeffs;
     const needFn = (name: string): number[] => {
@@ -269,8 +320,18 @@ export function runAnalysis(raw: unknown): AnalysisResult {
   const evalQueryEnv = (env: Env, src: unknown): number | null => {
     if (isExprSrc(src)) { try { return evalExpr(src.expr, env, fitAt(env).funcs); } catch { return null; } }
     if (isSolidVolSrc(src)) { try { return solidVolumeAt(env, src); } catch { return null; } }
-    let ops: unknown[]; try { ops = concreteOpsEnv(env); } catch { return null; }
-    const res = run({ solidName: plan.solidName, ops, asserts: [], queries: [src] });
+    // GỘP: cộng/trừ các nguồn số con (có thể trộn khối ghép với truy vấn hình học).
+    if (isCombineSrc(src)) {
+      let acc: number | null = null;
+      for (const sub of src.of) {
+        const v = evalQueryEnv(env, sub);
+        if (v === null || !Number.isFinite(v)) return null;
+        acc = acc === null ? v : (src.op === 'sum' ? acc + v : acc - v);
+      }
+      return acc;
+    }
+    let ops: unknown[]; try { ops = withPlaceholderOp(concreteOpsEnv(env)); } catch { return null; }
+    const res = run({ solidName: plan.solidName, ops, asserts: [], queries: [numifyQuery(src, env)] });
     if (!res.ok || res.answers.length === 0) return null;
     try { return scalarOf(res.answers[0]); } catch { return null; }
   };
@@ -287,6 +348,8 @@ export function runAnalysis(raw: unknown): AnalysisResult {
         try { values[index] = evalExpr(source.expr, env, fitAt(env).funcs); } catch { values[index] = null; }
       } else if (isSolidVolSrc(source)) {
         try { values[index] = solidVolumeAt(env, source); } catch { values[index] = null; }
+      } else if (isCombineSrc(source)) {
+        values[index] = evalQueryEnv(env, source);
       } else {
         geometric.push({ index, source });
       }
@@ -294,12 +357,12 @@ export function runAnalysis(raw: unknown): AnalysisResult {
 
     if (geometric.length === 0) return values;
     let ops: unknown[];
-    try { ops = concreteOpsEnv(env); } catch { return values; }
+    try { ops = withPlaceholderOp(concreteOpsEnv(env)); } catch { return values; }
     const result = run({
       solidName: plan.solidName,
       ops,
       asserts: [],
-      queries: geometric.map(({ source }) => source),
+      queries: geometric.map(({ source }) => numifyQuery(source, env)),
     });
     if (!result.ok || result.answers.length !== geometric.length) return values;
     geometric.forEach(({ index }, answerIndex) => {
@@ -315,10 +378,14 @@ export function runAnalysis(raw: unknown): AnalysisResult {
       const { funcs } = fitAt({});
       const from = evalExpr(String(az.from), {}, funcs);
       const to = evalExpr(String(az.to), {}, funcs);
-      const r = integrate((x) => evalExpr(az.integrand, { [az.variable]: x }, funcs), from, to);
+      // Siết dung sai tích phân (1e-12 thay vì 1e-9): giá trị chính xác hơn thì bước nhận dạng
+      // hằng số bắt được đúng dạng hữu tỉ/căn (đo được: 124/3 trước đây trượt vì lệch 3,5e-8).
+      const r = integrate((x) => evalExpr(az.integrand, { [az.variable]: x }, funcs), from, to, 1e-12);
       return {
         ok: true, parameter: { name: az.variable, value: NaN },
-        answer: mkAnswer(r.value),
+        // Simpson kép cho SAI SỐ ƯỚC LƯỢNG (Richardson): dùng chính nó làm dung sai nhận dạng,
+        // nên '41.3333329…' được nhận đúng là 124/3 mà vẫn có căn cứ, không phải làm tròn bừa.
+        answer: mkAnswer(r.value, Math.max(1e-10, 20 * r.estimatedError)),
         violations: [], errors: [], geometry: buildAnalysisFigure(az.variable, buildFigureInput({})),
       };
     } catch (e) { return fail(az.variable, (e as Error).message); }
@@ -378,12 +445,25 @@ export function runAnalysis(raw: unknown): AnalysisResult {
       const los = decls.map((d) => evalExpr(String(d!.domain[0]), {}));
       const his = decls.map((d) => evalExpr(String(d!.domain[1]), {}));
       const envOf = (xs: number[]): Env => { const env: Env = {}; az.parameters.forEach((nm, i) => { env[nm] = xs[i]; }); return env; };
+      const isSrc = (v: unknown): boolean => !!v && typeof v === 'object';
       const residualsOf = (env: Env): (number | null)[] => {
         const queryValues = evalQueriesEnv(env, az.constraints.map((constraint) => constraint.of));
+        // Vế phải cũng có thể là một TRUY VẤN (vd "IA = IB") ⇒ tính bằng cùng bộ máy, cùng env.
+        const rhsIdx: number[] = [];
+        az.constraints.forEach((c, i) => { if (isSrc(c.equals)) rhsIdx.push(i); });
+        const rhsVals = new Array<number | null>(az.constraints.length).fill(null);
+        if (rhsIdx.length > 0) {
+          const got = evalQueriesEnv(env, rhsIdx.map((i) => az.constraints[i].equals));
+          rhsIdx.forEach((i, k) => { rhsVals[i] = got[k]; });
+        }
         return az.constraints.map((constraint, index) => {
           const value = queryValues[index];
           if (value === null || !Number.isFinite(value)) return null;
-          return value - evalExpr(String(constraint.equals), env);
+          let target: number | null;
+          if (isSrc(constraint.equals)) target = rhsVals[index];
+          else { try { target = evalExpr(String(constraint.equals), env); } catch { target = null; } }
+          if (target === null || !Number.isFinite(target)) return null;
+          return value - target;
         });
       };
       const objective = (xs: number[]): number => {
@@ -409,7 +489,7 @@ export function runAnalysis(raw: unknown): AnalysisResult {
       if (maxResid > RESID_TOL) return fail(az.parameters.join(','), `không giải được (residual ${maxResid.toExponential(2)})`);
       let violations: unknown[] = [], errors: { message: string }[] = [], geometry: unknown = null;
       try {
-        const res = run({ solidName: plan.solidName, ops: concreteOpsEnv(envBest), asserts: plan.asserts, queries: [] });
+        const res = run({ solidName: plan.solidName, ops: withPlaceholderOp(concreteOpsEnv(envBest)), asserts: assertsAtSolution(maxResid), queries: [] });
         violations = res.violations; errors = res.errors.map((e) => ({ message: e.message }));
         if (res.entities.points.size > 0) geometry = entityTableToGeometryData(res.entities, plan.solidName || 'figure');
       } catch (e) { errors = [{ message: (e as Error).message }]; }
@@ -433,25 +513,29 @@ export function runAnalysis(raw: unknown): AnalysisResult {
   const hi = evalExpr(String(decl.domain[1]), {});
 
   // Thay tham số bằng số trong các op (điểm/mặt-cầu-lệch). Bọc mỏng concreteOpsEnv với env 1-biến.
-  const concreteOps = (value: number): unknown[] => concreteOpsEnv({ [pname]: value });
+  const concreteOps = (value: number): unknown[] => withPlaceholderOp(concreteOpsEnv({ [pname]: value }));
 
   // Đánh giá nguồn số tại giá trị tham số (KHÔNG kèm asserts — dùng khi quét/giải). null nếu lỗi.
   const evalQuery = (value: number, src: unknown): number | null => evalQueryEnv({ [pname]: value }, src);
 
   // Tại nghiệm cuối: lấy đáp số + kiểm asserts (nếu có hình học) để tự kiểm mô hình.
-  const finalize = (value: number, src: unknown): AnalysisResult => {
+  const finalize = (value: number, src: unknown, resid = 0): AnalysisResult => {
     const env = { [pname]: value };
     let violations: unknown[] = [];
     let errors: { message: string }[] = [];
     let val = NaN;
     let geometry: unknown = null;
-    if (isExprSrc(src) || isSolidVolSrc(src)) {
+    if (isExprSrc(src) || isSolidVolSrc(src) || isCombineSrc(src)) {
       try {
-        val = isSolidVolSrc(src) ? solidVolumeAt(env, src) : evalExpr(src.expr, env, fitAt(env).funcs);
+        const v = isCombineSrc(src) ? evalQueryEnv(env, src)
+          : isSolidVolSrc(src) ? solidVolumeAt(env, src)
+          : evalExpr(src.expr, env, fitAt(env).funcs);
+        if (v === null) throw new Error('nguồn số không đánh giá được tại nghiệm');
+        val = v;
       } catch (e) { return fail(pname, (e as Error).message); }
       if (plan.ops.length > 0) {
         try {
-          const res = run({ solidName: plan.solidName, ops: concreteOps(value), asserts: plan.asserts, queries: [] });
+          const res = run({ solidName: plan.solidName, ops: concreteOps(value), asserts: assertsAtSolution(resid), queries: [] });
           violations = res.violations; errors = res.errors.map((e) => ({ message: e.message }));
           if (res.entities.points.size > 0) geometry = entityTableToGeometryData(res.entities, plan.solidName || 'figure');
         } catch (e) { errors = [{ message: (e as Error).message }]; }
@@ -459,7 +543,7 @@ export function runAnalysis(raw: unknown): AnalysisResult {
     } else {
       let ops: unknown[];
       try { ops = concreteOps(value); } catch (e) { return fail(pname, (e as Error).message); }
-      const res = run({ solidName: plan.solidName, ops, asserts: plan.asserts, queries: [src] });
+      const res = run({ solidName: plan.solidName, ops, asserts: assertsAtSolution(resid), queries: [numifyQuery(src, env)] });
       try { if (res.answers.length > 0) val = scalarOf(res.answers[0]); } catch { /* không trả số */ }
       violations = res.violations; errors = res.errors.map((e) => ({ message: e.message }));
       if (res.entities.points.size > 0) geometry = entityTableToGeometryData(res.entities, plan.solidName || 'figure');
@@ -482,13 +566,23 @@ export function runAnalysis(raw: unknown): AnalysisResult {
   }
 
   // solve
-  const target = evalExpr(String(plan.analyze.constraint.equals), {});
+  const cequals = plan.analyze.constraint.equals;
+  const rhsIsSrc = !!cequals && typeof cequals === 'object';
+  const target = rhsIsSrc ? 0 : evalExpr(String(cequals), {});
   const cof = plan.analyze.constraint.of;
-  const g = (x: number): number => { const v = evalQuery(x, cof); if (v === null) throw new Error('constraint lỗi tại tham số'); return v; };
+  // Vế phải là truy vấn ⇒ giải g(x) = lhs(x) − rhs(x) = 0 (cả hai vế đều phụ thuộc tham số).
+  const g = (x: number): number => {
+    const v = evalQuery(x, cof);
+    if (v === null) throw new Error('constraint lỗi tại tham số');
+    if (!rhsIsSrc) return v;
+    const t = evalQuery(x, cequals);
+    if (t === null) throw new Error('vế phải của ràng buộc lỗi tại tham số');
+    return v - t;
+  };
   let sol;
   try { sol = solveParam(g, target, lo, hi); } catch (e) { return fail(pname, (e as Error).message); }
   if (!sol) return fail(pname, 'không tìm được nghiệm tham số trong miền');
-  return finalize(sol.x, plan.analyze.report);
+  return finalize(sol.x, plan.analyze.report, sol.residual);
 }
 
 // Dispatch: có `analyze` ⇒ runAnalysis; ngược lại run() thường.

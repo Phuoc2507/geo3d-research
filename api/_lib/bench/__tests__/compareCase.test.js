@@ -104,4 +104,38 @@ describe('compareCase', () => {
       expect(compareCase(g, threeCoords(1, 2, 0)).verdict).toBe('regress-answer');
     });
   });
+
+  // Các ca dưới đây đến từ nhánh nghiên cứu (rổ golden 210 ca có nhiều đáp "thang chữ").
+  it('đáp PHI-SỐ (nhãn/phương trình): so chuỗi chuẩn hoá', () => {
+    const g = { id: 't', expect: { ok: true, answers: [{ text: 'chéo nhau' }] } };
+    expect(compareCase(g, { ok: true, answers: [{ text: 'Chéo  nhau' }] }).verdict).toBe('pass');
+    expect(compareCase(g, { ok: true, answers: [{ text: 'song song' }] }).verdict).toBe('regress-answer');
+  });
+
+  it('góc theo ĐỘ: so bằng giá trị số', () => {
+    const g = { id: 't', expect: { ok: true, answers: [{ text: '60°' }] } };
+    expect(compareCase(g, { ok: true, answers: [{ text: '60°' }] }).verdict).toBe('pass');
+    expect(compareCase(g, { ok: true, answers: [{ text: '45°' }] }).verdict).toBe('regress-answer');
+  });
+
+  it('đáp "thang chữ" (a³·√2/12): khớp bất kể số mũ trên/^ và dấu nhân', () => {
+    const g = { id: 't', expect: { ok: true, answers: [{ text: 'a^3·√2/12' }] } };
+    expect(compareCase(g, { ok: true, answers: [{ text: 'a³·√2/12' }] }).verdict).toBe('pass');
+    expect(compareCase(g, { ok: true, answers: [{ text: 'a³√2/12' }] }).verdict).toBe('pass'); // engine bỏ dấu ·
+    const g2 = { id: 't', expect: { ok: true, answers: [{ text: 'a√3' }] } };
+    expect(compareCase(g2, { ok: true, answers: [{ text: 'a·√3' }] }).verdict).toBe('pass');
+    expect(compareCase(g2, { ok: true, answers: [{ text: 'a·√2' }] }).verdict).toBe('regress-answer'); // vẫn phân biệt √3≠√2
+  });
+
+  it('đáp ký hiệu: HIỂU phép nhân đổi chỗ (28πa²/3 == a²·28π/3) mà không khớp sai', () => {
+    const g = { id: 't', expect: { ok: true, answers: [{ text: '28πa²/3' }] } };
+    expect(compareCase(g, { ok: true, answers: [{ text: 'a²·28π/3' }] }).verdict).toBe('pass');
+    const g2 = { id: 't', expect: { ok: true, answers: [{ text: 'a/2' }] } };
+    expect(compareCase(g2, { ok: true, answers: [{ text: 'a·1/2' }] }).verdict).toBe('pass');
+    // KHÔNG được khớp sai: khác mẫu, hoặc thiếu thừa số a
+    const g3 = { id: 't', expect: { ok: true, answers: [{ text: 'a√5/3' }] } };
+    expect(compareCase(g3, { ok: true, answers: [{ text: 'a√5/5' }] }).verdict).toBe('regress-answer');
+    const g4 = { id: 't', expect: { ok: true, answers: [{ text: '25a/8' }] } };
+    expect(compareCase(g4, { ok: true, answers: [{ text: '25/8' }] }).verdict).toBe('regress-answer');
+  });
 });

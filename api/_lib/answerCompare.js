@@ -13,16 +13,16 @@ function parseFactor(raw) {
   // Hạng π: [coef]π[/den] — engine trả các dạng '16π', '32π/3', 'π'.
   // Trước đây KHÔNG đọc được ⇒ mọi đáp mặt cầu/khối tròn xoay đều không so được,
   // vừa không làm golden được vừa khiến cross-check im lặng bỏ qua.
-  const pi = t.match(/^([+-]?\d*(?:\.\d+)?)π(?:\/(\d+))?$/);
-  if (pi) {
-    const coefStr = pi[1];
-    let coef;
-    if (coefStr === '' || coefStr === '+') coef = 1;
-    else if (coefStr === '-') coef = -1;
-    else coef = parseFloat(coefStr);
-    const den = pi[2] ? parseInt(pi[2], 10) : 1;
-    if (!Number.isFinite(coef) || den === 0) return null;
-    return (coef * Math.PI) / den;
+  // Cách đọc: GỠ 'π' rồi đọc phần hệ số còn lại bằng chính parseFactor (đệ quy) và nhân Math.PI —
+  // nhờ vậy hệ số có thể là căn ('8√2π/3', '2√2π') chứ không chỉ số nguyên như regex cũ.
+  // Hệ số rỗng/±/'/…' được chuẩn hoá thành 1/±1/1/… trước khi đọc.
+  if (t.includes('π')) {
+    let c = t.replace('π', '');
+    c = c.replace(/^([+-]?)\//, '$11/');        // 'π/3'→'1/3' ; '-π/3'→'-1/3'
+    if (c === '' || c === '+') c = '1';
+    else if (c === '-') c = '-1';
+    const base = parseFactor(c);
+    return base === null ? null : base * Math.PI;
   }
   // Hạng căn: [coef]√radicand[/den]
   const surd = t.match(/^([+-]?\d*(?:\.\d+)?)√(\d+)(?:\/(\d+))?$/);
@@ -77,6 +77,8 @@ export function toNumeric(text) {
   // làm golden được vừa bị cross-check bỏ qua. Đơn vị ở đây luôn là độ nên bỏ ký hiệu
   // đi là so số được.
   s = s.replace(/°/g, '');
+  // Bỏ dấu xấp xỉ đầu chuỗi (engine có thể trả "≈35.26°").
+  s = s.replace(/^[≈~]\s*/, '');
   // Bỏ khoảng trắng thừa quanh dấu để tách hạng tử theo +/-
   s = s.replace(/\s+/g, '');
   if (!s) return null;

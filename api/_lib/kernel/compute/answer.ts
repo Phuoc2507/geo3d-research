@@ -1,5 +1,5 @@
 // api/_lib/kernel/compute/answer.ts
-import { type Exact, type Scalar, displayScalar, exactToApprox, makeExact } from '../scalar';
+import { type Exact, type Scalar, displayScalar, exactToApprox, makeExact, hasExactValue, exactValueToApprox, neg } from '../scalar';
 import { type Vec3S, subV, dotV, crossV, lenSqV } from '../vec3s';
 import type { Entity } from '../entities';
 
@@ -14,6 +14,9 @@ export type DistanceAnswer = {
   approx: number;
   text: string;
   approximate: boolean;
+  // Giá trị Scalar ĐẦY ĐỦ (gồm cả dạng tổng nhiều căn mà `exact` một-căn không chứa nổi).
+  // Cần cho truy vấn `combine`: cộng/trừ các đại lượng đã tính mà KHÔNG mất tính chính xác.
+  scalar?: Scalar;
 };
 
 export type AngleAnswer = {
@@ -40,10 +43,13 @@ export function firstDegenerate(entities: Entity[]): string | null {
 // exact lẫn lỗi chép công thức.
 export function certifyDistance(s: Scalar, floatRef: number): DistanceAnswer {
   const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
-  if (s.exact !== null && Math.abs(exactToApprox(s.exact) - floatRef) <= tol) {
-    return { kind: 'distance', exact: s.exact, approx: exactToApprox(s.exact), text: displayScalar(s), approximate: false };
+  // Chấp nhận CẢ hai lớp: một-căn (exact) và TỔNG NHIỀU CĂN (sum). Vẫn bắt buộc qua
+  // cross-check với float độc lập — lệch quá dung sai thì bỏ, hạ về gần đúng.
+  const ev = hasExactValue(s) ? exactValueToApprox(s) : null;
+  if (ev !== null && Math.abs(ev - floatRef) <= tol) {
+    return { kind: 'distance', exact: s.exact, approx: ev, text: displayScalar(s), approximate: false, scalar: s };
   }
-  return { kind: 'distance', exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true };
+  return { kind: 'distance', exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
 }
 
 const NICE_DEGREES = [0, 30, 45, 60, 90];
@@ -77,13 +83,28 @@ export function certifyAngle(metric: Scalar, floatMetric: number, complement: bo
     const hit = NICE_ABSCOS.find((e) => exactEq(exactM as Exact, e.m));
     if (hit) niceDeg = complement ? 90 - hit.phi : hit.phi;
   }
+  // Xuất đáp GÓC theo quy ước đề Việt Nam:
+  //  • Góc ĐẸP (0/30/45/60/90) → hiện độ, vd "60°".
+  //  • Góc KHÔNG đẹp nhưng CÓ metric exact → hiện chính giá trị lượng-giác exact được chứng nhận
+  //    (|cos| cho đường–đường/mặt–mặt, |sin| cho đường–mặt) — đúng thứ đề hỏi khi góc không đẹp
+  //    ("côsin của góc…", "sin của góc…"), thay vì số độ làm tròn. Trước đây luôn hiện "≈ x.xx°"
+  //    nên bài hỏi côsin bị chấm sai dù engine đã có sẵn giá trị đúng.
+  //  • Không có metric exact → giữ số độ xấp xỉ (đáp gần đúng, đánh dấu approximate).
+  // Giá trị lượng giác chính xác theo nghĩa RỘNG (một căn HOẶC tổng nhiều căn), vẫn bắt buộc
+  // qua cross-check với float độc lập.
+  const evM = hasExactValue(metric) ? exactValueToApprox(metric) : null;
+  const exactBroad = evM !== null && Math.abs(evM - floatMetric) <= 1e-6;
+  const text =
+    niceDeg !== null ? `${niceDeg}°`
+    : exactBroad ? displayScalar(metric)
+    : `≈ ${angleValue.toFixed(2)}°`;
   return {
     kind: 'angle',
     exactDegrees: niceDeg,
     degrees: niceDeg !== null ? niceDeg : angleValue,
     exactCos: exactM,
-    text: niceDeg !== null ? `${niceDeg}°` : `≈ ${angleValue.toFixed(2)}°`,
-    approximate: niceDeg === null,
+    text,
+    approximate: niceDeg === null && !exactBroad,
   };
 }
 
@@ -119,14 +140,66 @@ export type ScalarAnswer = {
   approx: number;
   text: string;
   approximate: boolean;
+  scalar?: Scalar; // xem chú thích ở DistanceAnswer — phần KHÔNG π của giá trị
+  // Hệ số của π (đáp dạng kπ của khối tròn xoay: trụ/nón/cầu). Giá trị đầy đủ = scalar + piCoeff·π.
+  // Có trường này thì `combine` gộp được các khối tròn xoay ("khối ghép": trụ khoét rãnh, trụ + nón…)
+  // mà vẫn giữ dạng π chính xác — trước đây đáp π không mang Scalar nên combine từ chối gộp.
+  piCoeff?: Scalar;
 };
 
 export function certifyScalar(kind: string, s: Scalar, floatRef: number): ScalarAnswer {
   const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
-  if (s.exact !== null && Math.abs(exactToApprox(s.exact) - floatRef) <= tol) {
-    return { kind, exact: s.exact, approx: exactToApprox(s.exact), text: displayScalar(s), approximate: false };
+  const ev = hasExactValue(s) ? exactValueToApprox(s) : null;
+  if (ev !== null && Math.abs(ev - floatRef) <= tol) {
+    return { kind, exact: s.exact, approx: ev, text: displayScalar(s), approximate: false, scalar: s };
   }
-  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true };
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
+}
+
+// Ghép hệ số (rational×căn) với π thành chuỗi gọn: '8'→'8π', '8/3'→'8π/3', '2√2/3'→'2√2π/3', '1'→'π'.
+function piText(s: Scalar): string {
+  const d = displayScalar(s);
+  if (d === '1') return 'π';
+  if (d === '-1') return '-π';
+  // Hệ số là TỔNG nhiều căn ⇒ phải bọc ngoặc, nếu không '√2 + √3' + 'π' đọc thành √2 + (√3·π).
+  const multi = (s.sum?.terms.length ?? 0) > 1;
+  if (multi) return d.startsWith('(') ? d.replace(')/', ')π/') : `(${d})π`;
+  const slash = d.indexOf('/');
+  return slash >= 0 ? d.slice(0, slash) + 'π' + d.slice(slash) : d + 'π';
+}
+
+// Đáp số dạng (hệ số)·π — cho thể tích/diện tích mặt cầu. `coeff` là hệ số ĐÚNG (rational×căn); nếu
+// coeff là exact và giá trị coeff·π khớp float tham chiếu (self-check) ⇒ trả DẠNG π CHÍNH XÁC (vd '36π',
+// '8√2π/3'); ngược lại rơi về số thập phân. Trường `exact` giữ null vì π không nằm trong trường (num/den/căn).
+export function piScalarAnswer(kind: string, coeff: Scalar, floatRef: number): ScalarAnswer {
+  const evC = hasExactValue(coeff) ? exactValueToApprox(coeff) : null;
+  const val = (evC ?? coeff.approx) * Math.PI;
+  const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
+  if (evC !== null && Math.abs(val - floatRef) <= tol) {
+    return { kind, exact: null, approx: val, text: piText(coeff), approximate: false, piCoeff: coeff };
+  }
+  // Gần đúng: vẫn mang Scalar float để combine gộp được (kết quả gộp sẽ là gần đúng — trung thực).
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
+}
+
+// Đáp HỖN HỢP p + q·π (vd khối ghép hình hộp + nửa cầu: 8 + 16π/3). `plain` là phần không π, `pi` là hệ số
+// của π; cả hai phải chính xác và tổng phải khớp float tham chiếu độc lập — không thì hạ về gần đúng.
+// Trường hợp một trong hai phần bằng 0 chính xác thì quy về certifyScalar / piScalarAnswer thông thường
+// (giữ nguyên định dạng đáp quen thuộc "27√3", "36π").
+export function mixedPiScalarAnswer(kind: string, plain: Scalar, pi: Scalar, floatRef: number): ScalarAnswer {
+  const exactZero = (s: Scalar): boolean => hasExactValue(s) && exactValueToApprox(s) === 0;
+  if (exactZero(pi)) return certifyScalar(kind, plain, floatRef);
+  if (exactZero(plain)) return piScalarAnswer(kind, pi, floatRef);
+  const evP = hasExactValue(plain) ? exactValueToApprox(plain) : null;
+  const evC = hasExactValue(pi) ? exactValueToApprox(pi) : null;
+  const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
+  if (evP !== null && evC !== null && Math.abs(evP + evC * Math.PI - floatRef) <= tol) {
+    const negPi = evC < 0;
+    const piPart = piText(negPi ? neg(pi) : pi);
+    const text = `${displayScalar(plain)} ${negPi ? '-' : '+'} ${piPart}`;
+    return { kind, exact: null, approx: evP + evC * Math.PI, text, approximate: false, scalar: plain, piCoeff: pi };
+  }
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
 }
 
 // Kiểm một Scalar bằng 0 (exact chính xác khi có, ngược lại ngưỡng float).

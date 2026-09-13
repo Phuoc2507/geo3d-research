@@ -55,7 +55,10 @@ function fmtPiTerm(num: number, den: number): string {
   return den === 1 ? coeff : `${coeff}/${den}`;
 }
 
-export function recognizeConstant(x: number): Recognized | null {
+// `eps` = dung sai nhận dạng. Mặc định rất chặt (1e-10) cho giá trị tính bằng số học chính xác.
+// Với giá trị đến từ PHƯƠNG PHÁP SỐ (vd tích phân Simpson), caller truyền vào SAI SỐ ƯỚC LƯỢNG của
+// chính phương pháp đó — nhận dạng lúc ấy vẫn có căn cứ, không phải đoán bừa.
+export function recognizeConstant(x: number, eps: number = EPS): Recognized | null {
   // 1) Hữu tỉ
   const q0 = asRational(x, MAX_DEN);
   if (q0) return { text: fmtRational(q0.p, q0.q), value: q0.p / q0.q };
@@ -66,7 +69,7 @@ export function recognizeConstant(x: number): Recognized | null {
     const r = asRational(s, MAX_DEN);
     if (r && r.p !== 0) {
       const val = (r.p / r.q) * Math.sqrt(b);
-      if (Math.abs(val - x) < EPS) {
+      if (Math.abs(val - x) < eps) {
         const sign = r.p < 0 ? '-' : '';
         return { text: sign + fmtSurdTerm(Math.abs(r.p), r.q, b), value: val };
       }
@@ -83,7 +86,7 @@ export function recognizeConstant(x: number): Recognized | null {
         const p = asRational(x - qv * root, 16);
         if (!p) continue;
         const val = p.p / p.q + qv * root;
-        if (Math.abs(val - x) < EPS) {
+        if (Math.abs(val - x) < eps) {
           const qAbsNum = Math.abs(qn);
           const g = gcd(qAbsNum, qd);
           const surd = fmtSurdTerm(qAbsNum / g, qd / g, r);
@@ -98,9 +101,25 @@ export function recognizeConstant(x: number): Recognized | null {
   const rp = asRational(x / Math.PI, 64);
   if (rp && rp.p !== 0) {
     const val = (rp.p / rp.q) * Math.PI;
-    if (Math.abs(val - x) < EPS) {
+    if (Math.abs(val - x) < eps) {
       const sign = rp.p < 0 ? '-' : '';
       return { text: sign + fmtPiTerm(Math.abs(rp.p), rp.q), value: val };
+    }
+  }
+
+  // 4b) (p/q)·√b·π — hệ số của π là một CĂN (vd 8√2π, 4√3π/3). Rất hay gặp ở khối tròn xoay
+  //     (thể tích/diện tích mặt cầu, nón có cạnh vô tỉ); thiếu nhánh này thì đáp đúng vẫn bị coi là
+  //     số thập phân rồi bị cổng chỉ-nhận-đáp-exact loại.
+  for (const b of SQUAREFREE) {
+    if (b === 1) continue; // đã bắt ở nhánh kπ/m
+    const t = x / (Math.PI * Math.sqrt(b));
+    const r = asRational(t, MAX_DEN);
+    if (r && r.p !== 0) {
+      const val = (r.p / r.q) * Math.sqrt(b) * Math.PI;
+      if (Math.abs(val - x) < eps) {
+        const sign = r.p < 0 ? '-' : '';
+        return { text: sign + fmtSurdTerm(Math.abs(r.p), r.q, b).replace('/', 'π/').concat(fmtSurdTerm(Math.abs(r.p), r.q, b).includes('/') ? '' : 'π'), value: val };
+      }
     }
   }
 
@@ -112,7 +131,7 @@ export function recognizeConstant(x: number): Recognized | null {
       const p = asRational(x - qv * Math.PI, 16);
       if (!p || p.p === 0) continue; // p=0 ⇒ đã bắt ở nhánh kπ/m
       const val = p.p / p.q + qv * Math.PI;
-      if (Math.abs(val - x) < EPS) {
+      if (Math.abs(val - x) < eps) {
         const qAbsNum = Math.abs(qn);
         const g = gcd(qAbsNum, qd);
         const piTerm = fmtPiTerm(qAbsNum / g, qd / g);

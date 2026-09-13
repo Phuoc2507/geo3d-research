@@ -280,8 +280,8 @@ var ZodError = class _ZodError extends Error {
   constructor(issues) {
     super();
     this.issues = [];
-    this.addIssue = (sub6) => {
-      this.issues = [...this.issues, sub6];
+    this.addIssue = (sub7) => {
+      this.issues = [...this.issues, sub7];
     };
     this.addIssues = (subs = []) => {
       this.issues = [...this.issues, ...subs];
@@ -348,13 +348,13 @@ var ZodError = class _ZodError extends Error {
   flatten(mapper = (issue) => issue.message) {
     const fieldErrors = {};
     const formErrors = [];
-    for (const sub6 of this.issues) {
-      if (sub6.path.length > 0) {
-        const firstEl = sub6.path[0];
+    for (const sub7 of this.issues) {
+      if (sub7.path.length > 0) {
+        const firstEl = sub7.path[0];
         fieldErrors[firstEl] = fieldErrors[firstEl] || [];
-        fieldErrors[firstEl].push(mapper(sub6));
+        fieldErrors[firstEl].push(mapper(sub7));
       } else {
-        formErrors.push(mapper(sub6));
+        formErrors.push(mapper(sub7));
       }
     }
     return { formErrors, fieldErrors };
@@ -5043,39 +5043,173 @@ function sqrtExact(a) {
   return makeExact(1n, a.den, radicand);
 }
 function num(n) {
-  return { approx: n, exact: null };
+  return { approx: n, exact: null, sum: null };
 }
 function fromExact(e) {
-  return { approx: exactToApprox(e), exact: e };
+  return { approx: exactToApprox(e), exact: e, sum: sumFromExact(e) };
 }
+function pack(approx, exact, sum) {
+  const ex = exact ?? (sum ? exactFromSum(sum) : null);
+  return { approx, exact: ex, sum };
+}
+var S = (a) => a.sum !== void 0 ? a.sum : a.exact ? sumFromExact(a.exact) : null;
 function rat(n, d = 1n) {
   return fromExact(makeExact(n, d, 1));
 }
 function add2(a, b) {
   const exact = a.exact && b.exact ? addExact(a.exact, b.exact) : null;
-  return { approx: a.approx + b.approx, exact };
+  const sa = S(a), sb = S(b);
+  return pack(a.approx + b.approx, exact, sa && sb ? addSum(sa, sb) : null);
 }
 function sub2(a, b) {
   const exact = a.exact && b.exact ? subExact(a.exact, b.exact) : null;
-  return { approx: a.approx - b.approx, exact };
+  const sa = S(a), sb = S(b);
+  return pack(a.approx - b.approx, exact, sa && sb ? subSum(sa, sb) : null);
 }
 function mul(a, b) {
   const exact = a.exact && b.exact ? mulExact(a.exact, b.exact) : null;
-  return { approx: a.approx * b.approx, exact };
+  const sa = S(a), sb = S(b);
+  return pack(a.approx * b.approx, exact, sa && sb ? mulSum(sa, sb) : null);
 }
 function div(a, b) {
   const exact = a.exact && b.exact && b.exact.num !== 0n ? divExact(a.exact, b.exact) : null;
-  return { approx: a.approx / b.approx, exact };
+  const sa = S(a), sb = S(b);
+  const sum = sa && sb && !isZeroSum(sb) ? divSum(sa, sb) : null;
+  return pack(a.approx / b.approx, exact, sum);
 }
 function neg(a) {
-  return { approx: -a.approx, exact: a.exact ? negExact(a.exact) : null };
+  const sa = S(a);
+  return pack(-a.approx, a.exact ? negExact(a.exact) : null, sa ? negSum(sa) : null);
 }
 function sqrt(a) {
   const exact = a.exact ? sqrtExact(a.exact) : null;
-  return { approx: Math.sqrt(a.approx), exact };
+  const sa = S(a);
+  return pack(Math.sqrt(a.approx), exact, sa ? sqrtSum(sa) : null);
 }
 function displayScalar(s) {
-  return s.exact ? displayExact(s.exact) : s.approx.toFixed(4);
+  if (s.sum && s.sum.terms.length > 1) return displaySum(s.sum);
+  if (s.exact) return displayExact(s.exact);
+  if (s.sum) return displaySum(s.sum);
+  return s.approx.toFixed(4);
+}
+function hasExactValue(s) {
+  return s.exact !== null || s.sum != null && s.sum.terms.length > 0;
+}
+function exactValueToApprox(s) {
+  if (s.sum && s.sum.terms.length > 0) return sumToApprox(s.sum);
+  return s.exact ? exactToApprox(s.exact) : null;
+}
+var MAX_SUM_TERMS = 8;
+function normalizeSum(rawTerms, den) {
+  if (den === 0n) return null;
+  let d = den;
+  const acc = /* @__PURE__ */ new Map();
+  for (const t of rawTerms) {
+    if (t.num === 0n) continue;
+    if (!Number.isInteger(t.radicand) || t.radicand < 1) return null;
+    if (t.radicand > MAX_SAFE_RADICAND) return null;
+    const { rad, factor } = extractSquare(t.radicand);
+    const n = t.num * factor;
+    acc.set(rad, (acc.get(rad) ?? 0n) + n);
+  }
+  let terms = [];
+  for (const [radicand, num3] of acc) if (num3 !== 0n) terms.push({ num: num3, radicand });
+  if (terms.length === 0) return { terms: [], den: 1n };
+  if (terms.length > MAX_SUM_TERMS) return null;
+  if (d < 0n) {
+    d = -d;
+    terms = terms.map((t) => ({ num: -t.num, radicand: t.radicand }));
+  }
+  let g = d;
+  for (const t of terms) g = bgcd(g, t.num);
+  if (g > 1n) {
+    d /= g;
+    terms = terms.map((t) => ({ num: t.num / g, radicand: t.radicand }));
+  }
+  terms.sort((a, b) => a.radicand - b.radicand);
+  return { terms, den: d };
+}
+function sumFromExact(e) {
+  return e.num === 0n ? { terms: [], den: 1n } : { terms: [{ num: e.num, radicand: e.radicand }], den: e.den };
+}
+function exactFromSum(s) {
+  if (s.terms.length === 0) return makeExact(0n, 1n, 1);
+  if (s.terms.length !== 1) return null;
+  return makeExact(s.terms[0].num, s.den, s.terms[0].radicand);
+}
+function sumToApprox(s) {
+  let acc = 0;
+  for (const t of s.terms) acc += Number(t.num) * Math.sqrt(t.radicand);
+  return acc / Number(s.den);
+}
+function isZeroSum(s) {
+  return s.terms.length === 0;
+}
+function negSum(a) {
+  return { terms: a.terms.map((t) => ({ num: -t.num, radicand: t.radicand })), den: a.den };
+}
+function addSum(a, b) {
+  const raw = [
+    ...a.terms.map((t) => ({ num: t.num * b.den, radicand: t.radicand })),
+    ...b.terms.map((t) => ({ num: t.num * a.den, radicand: t.radicand }))
+  ];
+  return normalizeSum(raw, a.den * b.den);
+}
+function subSum(a, b) {
+  return addSum(a, negSum(b));
+}
+function mulSum(a, b) {
+  const raw = [];
+  for (const x of a.terms) for (const y of b.terms) {
+    const radicand = x.radicand * y.radicand;
+    if (radicand > MAX_SAFE_RADICAND) return null;
+    raw.push({ num: x.num * y.num, radicand });
+  }
+  return normalizeSum(raw, a.den * b.den);
+}
+function invSum(b) {
+  if (b.terms.length === 0) return null;
+  if (b.terms.length === 1) {
+    const { num: n, radicand: k } = b.terms[0];
+    return normalizeSum([{ num: b.den, radicand: k }], n * BigInt(k));
+  }
+  if (b.terms.length === 2) {
+    const p2 = { terms: [b.terms[0]], den: b.den };
+    const q2 = { terms: [b.terms[1]], den: b.den };
+    const conj = subSum(p2, q2);
+    const p22 = mulSum(p2, p2), q22 = mulSum(q2, q2);
+    if (!conj || !p22 || !q22) return null;
+    const denom = subSum(p22, q22);
+    if (!denom || denom.terms.length !== 1) return null;
+    const invDenom = invSum(denom);
+    return invDenom ? mulSum(conj, invDenom) : null;
+  }
+  return null;
+}
+function divSum(a, b) {
+  const inv = invSum(b);
+  return inv ? mulSum(a, inv) : null;
+}
+function sqrtSum(a) {
+  if (a.terms.length === 0) return { terms: [], den: 1n };
+  if (a.terms.length !== 1 || a.terms[0].radicand !== 1) return null;
+  const e = exactFromSum(a);
+  if (!e) return null;
+  const r2 = sqrtExact(e);
+  return r2 ? sumFromExact(r2) : null;
+}
+function displaySum(s) {
+  if (s.terms.length === 0) return "0";
+  const piece = (t, first) => {
+    const neg2 = t.num < 0n;
+    const n = neg2 ? -t.num : t.num;
+    const sign = neg2 ? first ? "-" : " - " : first ? "" : " + ";
+    const body2 = t.radicand === 1 ? `${n}` : n === 1n ? `\u221A${t.radicand}` : `${n}\u221A${t.radicand}`;
+    return sign + body2;
+  };
+  const body = s.terms.map((t, i) => piece(t, i === 0)).join("");
+  if (s.den === 1n) return body;
+  return s.terms.length === 1 ? `${body}/${s.den}` : `(${body})/${s.den}`;
 }
 
 // api/_lib/kernel/vec3s.ts
@@ -5193,13 +5327,13 @@ function decimalToExact(s) {
   if (!/^\d*\.?\d+$/.test(body) && !/^\d+\.?\d*$/.test(body)) {
     throw new Error(`Cannot parse rational from "${s}" (use "p/q" for fractions)`);
   }
-  const dot3 = body.indexOf(".");
-  if (dot3 === -1) {
+  const dot4 = body.indexOf(".");
+  if (dot4 === -1) {
     const v = BigInt(body);
     return makeExact(neg2 ? -v : v, 1n, 1);
   }
-  const intPart = body.slice(0, dot3) || "0";
-  const fracPart = body.slice(dot3 + 1) || "0";
+  const intPart = body.slice(0, dot4) || "0";
+  const fracPart = body.slice(dot4 + 1) || "0";
   const den = 10n ** BigInt(fracPart.length);
   const numAbs = BigInt(intPart) * den + BigInt(fracPart);
   return makeExact(neg2 ? -numAbs : numAbs, den, 1);
@@ -5248,8 +5382,135 @@ function parseRational(input) {
   }
   return decimalToExact(s);
 }
+function tokenize(src) {
+  const s = src.replace(/\s+/g, "").replace(/[−–—]/g, "-").replace(/×|·/g, "*").replace(/√/g, "sqrt");
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (/[0-9.]/.test(c)) {
+      let n = "";
+      while (i < s.length && /[0-9.]/.test(s[i])) n += s[i++];
+      if ((n.match(/\./g) || []).length > 1) throw new Error(`Cannot parse number from "${n}"`);
+      out.push({ t: "num", v: n });
+      continue;
+    }
+    if (/[a-z]/i.test(c)) {
+      let w = "";
+      while (i < s.length && /[a-z]/i.test(s[i])) w += s[i++];
+      if (w.toLowerCase() !== "sqrt") throw new Error(`Cannot parse "${src}": g\u1EB7p t\xEAn "${w}" \u2014 bi\u1EC3u th\u1EE9c ph\u1EA3i l\xE0 s\u1ED1, kh\xF4ng ch\u1EE9a \u1EA9n`);
+      out.push({ t: "sqrt", v: "sqrt" });
+      continue;
+    }
+    if ("+-*/^".includes(c)) {
+      out.push({ t: "op", v: c });
+      i++;
+      continue;
+    }
+    if (c === "(") {
+      out.push({ t: "lp", v: c });
+      i++;
+      continue;
+    }
+    if (c === ")") {
+      out.push({ t: "rp", v: c });
+      i++;
+      continue;
+    }
+    throw new Error(`Cannot parse "${src}": k\xFD t\u1EF1 kh\xF4ng h\u1EE3p l\u1EC7 "${c}"`);
+  }
+  if (out.length === 0) throw new Error(`Cannot parse "${src}": chu\u1ED7i r\u1ED7ng`);
+  return out;
+}
+function parseTokens(tk, src) {
+  let i = 0;
+  const peek = () => tk[i];
+  const eat = (t, v) => {
+    const x = tk[i];
+    if (!x || x.t !== t || v !== void 0 && x.v !== v) throw new Error(`Cannot parse "${src}": sai c\xFA ph\xE1p`);
+    i++;
+    return x;
+  };
+  const startsUnit = () => {
+    const x = peek();
+    return !!x && (x.t === "num" || x.t === "sqrt" || x.t === "lp");
+  };
+  function unit() {
+    const x = peek();
+    if (!x) throw new Error(`Cannot parse "${src}": thi\u1EBFu to\xE1n h\u1EA1ng`);
+    if (x.t === "op" && x.v === "-") {
+      i++;
+      return neg(unit());
+    }
+    if (x.t === "op" && x.v === "+") {
+      i++;
+      return unit();
+    }
+    if (x.t === "num") {
+      i++;
+      return fromExact(decimalToExact(x.v));
+    }
+    if (x.t === "sqrt") {
+      i++;
+      eat("lp");
+      const inner = expr();
+      eat("rp");
+      return sqrt(inner);
+    }
+    if (x.t === "lp") {
+      i++;
+      const inner = expr();
+      eat("rp");
+      return inner;
+    }
+    throw new Error(`Cannot parse "${src}": sai c\xFA ph\xE1p`);
+  }
+  function power() {
+    let base = unit();
+    if (peek() && peek().t === "op" && peek().v === "^") {
+      i++;
+      const e = eat("num").v;
+      if (!/^\d+$/.test(e) || Number(e) > 8) throw new Error(`Cannot parse "${src}": s\u1ED1 m\u0169 ph\u1EA3i l\xE0 s\u1ED1 nguy\xEAn 0..8`);
+      let r2 = rat(1n);
+      for (let k = 0; k < Number(e); k++) r2 = mul(r2, base);
+      base = r2;
+    }
+    return base;
+  }
+  function term() {
+    let acc = power();
+    for (; ; ) {
+      const x = peek();
+      if (x && x.t === "op" && (x.v === "*" || x.v === "/")) {
+        i++;
+        acc = x.v === "*" ? mul(acc, power()) : div(acc, power());
+      } else if (startsUnit()) {
+        acc = mul(acc, power());
+      } else return acc;
+    }
+  }
+  function expr() {
+    let acc = term();
+    for (; ; ) {
+      const x = peek();
+      if (x && x.t === "op" && (x.v === "+" || x.v === "-")) {
+        i++;
+        acc = x.v === "+" ? add2(acc, term()) : sub2(acc, term());
+      } else return acc;
+    }
+  }
+  const out = expr();
+  if (i !== tk.length) throw new Error(`Cannot parse "${src}": c\xF2n k\xFD t\u1EF1 th\u1EEBa`);
+  return out;
+}
 function parseScalar(input) {
-  return fromExact(parseRational(input));
+  if (typeof input === "number") return fromExact(parseRational(input));
+  const s = input.trim();
+  try {
+    return fromExact(parseRational(s));
+  } catch {
+  }
+  return parseTokens(tokenize(s), s);
 }
 function parseVec3S(c) {
   return vec3s(parseScalar(c[0]), parseScalar(c[1]), parseScalar(c[2]));
@@ -5318,10 +5579,11 @@ function firstDegenerate(entities) {
 }
 function certifyDistance(s, floatRef) {
   const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
-  if (s.exact !== null && Math.abs(exactToApprox(s.exact) - floatRef) <= tol) {
-    return { kind: "distance", exact: s.exact, approx: exactToApprox(s.exact), text: displayScalar(s), approximate: false };
+  const ev = hasExactValue(s) ? exactValueToApprox(s) : null;
+  if (ev !== null && Math.abs(ev - floatRef) <= tol) {
+    return { kind: "distance", exact: s.exact, approx: ev, text: displayScalar(s), approximate: false, scalar: s };
   }
-  return { kind: "distance", exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true };
+  return { kind: "distance", exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
 }
 var NICE_ABSCOS = [
   { phi: 0, m: makeExact(1n, 1n, 1) },
@@ -5341,13 +5603,16 @@ function certifyAngle(metric, floatMetric, complement) {
     const hit = NICE_ABSCOS.find((e) => exactEq(exactM, e.m));
     if (hit) niceDeg = complement ? 90 - hit.phi : hit.phi;
   }
+  const evM = hasExactValue(metric) ? exactValueToApprox(metric) : null;
+  const exactBroad = evM !== null && Math.abs(evM - floatMetric) <= 1e-6;
+  const text = niceDeg !== null ? `${niceDeg}\xB0` : exactBroad ? displayScalar(metric) : `\u2248 ${angleValue.toFixed(2)}\xB0`;
   return {
     kind: "angle",
     exactDegrees: niceDeg,
     degrees: niceDeg !== null ? niceDeg : angleValue,
     exactCos: exactM,
-    text: niceDeg !== null ? `${niceDeg}\xB0` : `\u2248 ${angleValue.toFixed(2)}\xB0`,
-    approximate: niceDeg === null
+    text,
+    approximate: niceDeg === null && !exactBroad
   };
 }
 function coplanarityProblem(pts, what, tol = EPS3) {
@@ -5374,10 +5639,44 @@ function coplanarityProblem(pts, what, tol = EPS3) {
 }
 function certifyScalar(kind, s, floatRef) {
   const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
-  if (s.exact !== null && Math.abs(exactToApprox(s.exact) - floatRef) <= tol) {
-    return { kind, exact: s.exact, approx: exactToApprox(s.exact), text: displayScalar(s), approximate: false };
+  const ev = hasExactValue(s) ? exactValueToApprox(s) : null;
+  if (ev !== null && Math.abs(ev - floatRef) <= tol) {
+    return { kind, exact: s.exact, approx: ev, text: displayScalar(s), approximate: false, scalar: s };
   }
-  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true };
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
+}
+function piText(s) {
+  const d = displayScalar(s);
+  if (d === "1") return "\u03C0";
+  if (d === "-1") return "-\u03C0";
+  const multi = (s.sum?.terms.length ?? 0) > 1;
+  if (multi) return d.startsWith("(") ? d.replace(")/", ")\u03C0/") : `(${d})\u03C0`;
+  const slash = d.indexOf("/");
+  return slash >= 0 ? d.slice(0, slash) + "\u03C0" + d.slice(slash) : d + "\u03C0";
+}
+function piScalarAnswer(kind, coeff, floatRef) {
+  const evC = hasExactValue(coeff) ? exactValueToApprox(coeff) : null;
+  const val = (evC ?? coeff.approx) * Math.PI;
+  const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
+  if (evC !== null && Math.abs(val - floatRef) <= tol) {
+    return { kind, exact: null, approx: val, text: piText(coeff), approximate: false, piCoeff: coeff };
+  }
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
+}
+function mixedPiScalarAnswer(kind, plain2, pi, floatRef) {
+  const exactZero = (s) => hasExactValue(s) && exactValueToApprox(s) === 0;
+  if (exactZero(pi)) return certifyScalar(kind, plain2, floatRef);
+  if (exactZero(plain2)) return piScalarAnswer(kind, pi, floatRef);
+  const evP = hasExactValue(plain2) ? exactValueToApprox(plain2) : null;
+  const evC = hasExactValue(pi) ? exactValueToApprox(pi) : null;
+  const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
+  if (evP !== null && evC !== null && Math.abs(evP + evC * Math.PI - floatRef) <= tol) {
+    const negPi = evC < 0;
+    const piPart = piText(negPi ? neg(pi) : pi);
+    const text = `${displayScalar(plain2)} ${negPi ? "-" : "+"} ${piPart}`;
+    return { kind, exact: null, approx: evP + evC * Math.PI, text, approximate: false, scalar: plain2, piCoeff: pi };
+  }
+  return { kind, exact: null, approx: floatRef, text: floatRef.toFixed(4), approximate: true, scalar: { approx: floatRef, exact: null, sum: null } };
 }
 function isZeroS(s) {
   return s.exact !== null ? s.exact.num === 0n : Math.abs(s.approx) < EPS3;
@@ -5452,13 +5751,13 @@ function iLineSphere(l, s) {
   };
 }
 function iLineLine(l1, l2) {
-  const cross3 = crossV(l1.dir, l2.dir);
+  const cross4 = crossV(l1.dir, l2.dir);
   const w = subV(l2.p, l1.p);
-  if (isZeroS(lenSqV(cross3))) {
+  if (isZeroS(lenSqV(cross4))) {
     return isZeroS(lenSqV(crossV(w, l1.dir))) ? { kind: "intersection", result: "coincident" } : { kind: "intersection", result: "parallel" };
   }
-  if (!isZeroS(dotV(w, cross3))) return { kind: "intersection", result: "none" };
-  const t = div(dotV(crossV(w, l2.dir), cross3), lenSqV(cross3));
+  if (!isZeroS(dotV(w, cross4))) return { kind: "intersection", result: "none" };
+  const t = div(dotV(crossV(w, l2.dir), cross4), lenSqV(cross4));
   return { kind: "intersection", result: "point", point: pointFromCoords(addV(l1.p, scaleV(l1.dir, t))) };
 }
 function computeIntersection(a, b) {
@@ -6050,13 +6349,173 @@ function computePrismVolume(base, top) {
 }
 function computeSphereVolume(s) {
   const R = Math.sqrt(s.r2.approx);
-  const approx = 4 / 3 * Math.PI * R * R * R;
-  return { kind: "volume", exact: null, approx, text: `${approx.toFixed(4)}`, approximate: true };
+  const floatRef = 4 / 3 * Math.PI * R * R * R;
+  const coeff = mul(rat(4n, 3n), mul(s.r2, sqrt(s.r2)));
+  return piScalarAnswer("volume", coeff, floatRef);
 }
 function volumeRatio(a, b) {
   if (isZeroS(b)) return { ok: false, problem: "volume ratio: denominator volume is zero" };
   return { ok: true, answer: certifyScalar("ratio", div(a, b), a.approx / b.approx) };
 }
+function signS(s, scale4) {
+  if (hasExactValue(s)) {
+    const v2 = exactValueToApprox(s);
+    return v2 === 0 ? 0 : v2 < 0 ? -1 : 1;
+  }
+  if (s.sum && s.sum.terms.length === 0) return 0;
+  if (s.exact !== null && s.exact.num === 0n) return 0;
+  const v = s.approx;
+  return Math.abs(v) <= 1e-9 * scale4 ? 0 : v < 0 ? -1 : 1;
+}
+function convexHullFaces(pts) {
+  const n = pts.length;
+  if (n < 4) return { ok: false, problem: "convex hull needs at least 4 points" };
+  const fp = pts.map(toApproxVec);
+  let span = 0;
+  for (const p2 of fp) span = Math.max(span, Math.abs(p2.x), Math.abs(p2.y), Math.abs(p2.z));
+  span = Math.max(1, span);
+  const faces = /* @__PURE__ */ new Map();
+  let allCoplanar = true;
+  let sawPlane = false;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) {
+    const nrm = crossV(subV(pts[j], pts[i]), subV(pts[k], pts[i]));
+    const nLen = Math.sqrt(lenSqV(nrm).approx);
+    if (signS(lenSqV(nrm), span * span * span * span) === 0) continue;
+    sawPlane = true;
+    let pos = false, negS = false;
+    const on = [];
+    for (let l = 0; l < n; l++) {
+      const sg = signS(dotV(subV(pts[l], pts[i]), nrm), nLen * span);
+      if (sg > 0) pos = true;
+      else if (sg < 0) negS = true;
+      else on.push(l);
+      if (pos && negS) break;
+    }
+    if (pos && negS) continue;
+    if (pos || negS) allCoplanar = false;
+    const key = on.join(",");
+    if (!faces.has(key)) faces.set(key, { idx: on });
+  }
+  if (!sawPlane) return { ok: false, problem: "convex hull: all points are collinear" };
+  if (allCoplanar) return { ok: false, problem: "convex hull: all points are coplanar (no solid)" };
+  const covered = /* @__PURE__ */ new Set();
+  for (const f of faces.values()) for (const i of f.idx) covered.add(i);
+  for (let l = 0; l < n; l++) {
+    if (!covered.has(l)) return { ok: false, problem: `convex hull: point #${l + 1} lies strictly inside the hull (not a vertex)` };
+  }
+  return { ok: true, faces: [...faces.values()] };
+}
+function orderFace(idx, fp) {
+  const c = { x: 0, y: 0, z: 0 };
+  for (const i of idx) {
+    c.x += fp[i].x / idx.length;
+    c.y += fp[i].y / idx.length;
+    c.z += fp[i].z / idx.length;
+  }
+  let nrm = { x: 0, y: 0, z: 0 };
+  for (let a = 1; a < idx.length && length(nrm) < 1e-12; a++) for (let b = a + 1; b < idx.length; b++) {
+    nrm = cross(sub(fp[idx[a]], fp[idx[0]]), sub(fp[idx[b]], fp[idx[0]]));
+    if (length(nrm) >= 1e-12) break;
+  }
+  const u = normalize(sub(fp[idx[0]], c));
+  const v = normalize(cross(normalize(nrm), u));
+  return idx.slice().sort((a, b) => {
+    const pa = sub(fp[a], c), pb = sub(fp[b], c);
+    return Math.atan2(dot(pa, v), dot(pa, u)) - Math.atan2(dot(pb, v), dot(pb, u));
+  });
+}
+function convexHullVolumeScalar(pts) {
+  const hull = convexHullFaces(pts);
+  if (!hull.ok) return hull;
+  const fp = pts.map(toApproxVec);
+  let cS = pts[0];
+  for (let i = 1; i < pts.length; i++) cS = addV(cS, pts[i]);
+  cS = scaleV(cS, rat(1n, BigInt(pts.length)));
+  const cF = toApproxVec(cS);
+  let sum = rat(0n);
+  let floatRef = 0;
+  for (const f of hull.faces) {
+    const ord = orderFace(f.idx, fp);
+    let faceS = rat(0n);
+    let faceF = 0;
+    for (let t = 1; t < ord.length - 1; t++) {
+      faceS = add2(faceS, tripleScalar(pts[ord[0]], pts[ord[t]], pts[ord[t + 1]], cS));
+      faceF += scalarTriple(sub(fp[ord[t]], fp[ord[0]]), sub(fp[ord[t + 1]], fp[ord[0]]), sub(cF, fp[ord[0]]));
+    }
+    sum = add2(sum, absS(faceS));
+    floatRef += Math.abs(faceF);
+  }
+  return { ok: true, scalar: div(sum, rat(6n)), floatRef: floatRef / 6 };
+}
+function computeConvexHullVolume(pts) {
+  const r2 = convexHullVolumeScalar(pts.map((p2) => p2.p));
+  if (!r2.ok) return r2;
+  return { ok: true, answer: certifyScalar("volume", r2.scalar, r2.floatRef) };
+}
+
+// api/_lib/kernel/compute/decompCoverage.ts
+function sub3(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function cross3(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function orient3(a, b, c, d) {
+  return dot3(sub3(b, a), cross3(sub3(c, a), sub3(d, a)));
+}
+function pointInTetra(p2, t, relTol) {
+  const d0 = orient3(t[0], t[1], t[2], t[3]);
+  const a = Math.abs(d0);
+  if (a < 1e-12) return false;
+  const tol = relTol * a;
+  const s = d0 > 0 ? 1 : -1;
+  const d1 = orient3(p2, t[1], t[2], t[3]) * s;
+  const d2 = orient3(t[0], p2, t[2], t[3]) * s;
+  const d3 = orient3(t[0], t[1], p2, t[3]) * s;
+  const d4 = orient3(t[0], t[1], t[2], p2) * s;
+  return d1 >= -tol && d2 >= -tol && d3 >= -tol && d4 >= -tol;
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function coverageFraction(verts, tetras, samples = 4e3) {
+  if (verts.length < 4 || tetras.length === 0) return 1;
+  const rnd4 = mulberry32(2654435769 ^ verts.length * 131 + tetras.length);
+  const relTol = 1e-9;
+  let covered = 0;
+  for (let s = 0; s < samples; s++) {
+    const idx = [0, 0, 0, 0];
+    for (let k = 0; k < 4; k++) idx[k] = Math.floor(rnd4() * verts.length);
+    let w = [rnd4(), rnd4(), rnd4(), rnd4()];
+    const wsum = w[0] + w[1] + w[2] + w[3] || 1;
+    w = w.map((x) => x / wsum);
+    const p2 = [0, 0, 0];
+    for (let k = 0; k < 4; k++) {
+      const v = verts[idx[k]];
+      p2[0] += w[k] * v[0];
+      p2[1] += w[k] * v[1];
+      p2[2] += w[k] * v[2];
+    }
+    for (const t of tetras) {
+      if (pointInTetra(p2, t, relTol)) {
+        covered++;
+        break;
+      }
+    }
+  }
+  return covered / samples;
+}
+var COVERAGE_MIN = 0.95;
 
 // api/_lib/kernel/compute/area.ts
 var av4 = toApproxVec;
@@ -6094,10 +6553,70 @@ function computePolygonArea(pts) {
   return { ok: true, answer: certifyScalar("area", polygonAreaScalar(pts), fPolygon(pts.map((p2) => av4(p2.p)))) };
 }
 function computeSphereArea(s) {
-  const r2 = s.r2.approx;
-  const approx = 4 * Math.PI * r2;
-  const text = s.r2.exact ? `4\u03C0\xB7${displayScalar(s.r2)}` : `${approx.toFixed(4)}`;
-  return { kind: "area", exact: null, approx, text, approximate: true };
+  const floatRef = 4 * Math.PI * s.r2.approx;
+  return piScalarAnswer("area", mul(rat(4n), s.r2), floatRef);
+}
+
+// api/_lib/kernel/compute/roundSolids.ts
+var S2 = (x) => parseScalar(x);
+function slantScalar(r2, h) {
+  return sqrt(add2(mul(r2, r2), mul(h, h)));
+}
+function coneVolume(rIn, hIn) {
+  const r2 = S2(rIn), h = S2(hIn);
+  const coeff = mul(rat(1n, 3n), mul(mul(r2, r2), h));
+  return piScalarAnswer("volume", coeff, 1 / 3 * Math.PI * r2.approx * r2.approx * h.approx);
+}
+function cylinderVolume(rIn, hIn) {
+  const r2 = S2(rIn), h = S2(hIn);
+  return piScalarAnswer("volume", mul(mul(r2, r2), h), Math.PI * r2.approx * r2.approx * h.approx);
+}
+function coneSlant(rIn, hIn) {
+  const r2 = S2(rIn), h = S2(hIn);
+  return certifyScalar("slant", slantScalar(r2, h), Math.hypot(r2.approx, h.approx));
+}
+function coneArea(rIn, hIn, part) {
+  const r2 = S2(rIn), h = S2(hIn);
+  const l = slantScalar(r2, h);
+  const lf = Math.hypot(r2.approx, h.approx);
+  if (part === "lateral") return piScalarAnswer("area", mul(r2, l), Math.PI * r2.approx * lf);
+  return piScalarAnswer("area", mul(r2, add2(l, r2)), Math.PI * r2.approx * (lf + r2.approx));
+}
+function cylinderArea(rIn, hIn, part) {
+  const r2 = S2(rIn), h = S2(hIn);
+  if (part === "lateral") return piScalarAnswer("area", mul(rat(2n), mul(r2, h)), 2 * Math.PI * r2.approx * h.approx);
+  return piScalarAnswer("area", mul(rat(2n), mul(r2, add2(h, r2))), 2 * Math.PI * r2.approx * (h.approx + r2.approx));
+}
+function frustumSlantScalar(R, r2, h) {
+  const d = sub2(R, r2);
+  return sqrt(add2(mul(h, h), mul(d, d)));
+}
+function coneFrustumVolume(RIn, rIn, hIn) {
+  const R = S2(RIn), r2 = S2(rIn), h = S2(hIn);
+  const coeff = mul(rat(1n, 3n), mul(h, add2(add2(mul(R, R), mul(R, r2)), mul(r2, r2))));
+  const rf = 1 / 3 * Math.PI * h.approx * (R.approx * R.approx + R.approx * r2.approx + r2.approx * r2.approx);
+  return piScalarAnswer("volume", coeff, rf);
+}
+function coneFrustumSlant(RIn, rIn, hIn) {
+  const R = S2(RIn), r2 = S2(rIn), h = S2(hIn);
+  return certifyScalar("slant", frustumSlantScalar(R, r2, h), Math.hypot(h.approx, R.approx - r2.approx));
+}
+function coneFrustumArea(RIn, rIn, hIn, part) {
+  const R = S2(RIn), r2 = S2(rIn), h = S2(hIn);
+  const l = frustumSlantScalar(R, r2, h);
+  const lf = Math.hypot(h.approx, R.approx - r2.approx);
+  const lateralCoeff = mul(add2(R, r2), l);
+  const latRf = Math.PI * (R.approx + r2.approx) * lf;
+  if (part === "lateral") return piScalarAnswer("area", lateralCoeff, latRf);
+  const coeff = add2(lateralCoeff, add2(mul(R, R), mul(r2, r2)));
+  const rf = latRf + Math.PI * (R.approx * R.approx + r2.approx * r2.approx);
+  return piScalarAnswer("area", coeff, rf);
+}
+function pyramidFrustumVolume(s1In, s2In, hIn) {
+  const s1 = S2(s1In), s2 = S2(s2In), h = S2(hIn);
+  const coeff = mul(rat(1n, 3n), mul(h, add2(add2(s1, s2), sqrt(mul(s1, s2)))));
+  const rf = 1 / 3 * h.approx * (s1.approx + s2.approx + Math.sqrt(s1.approx * s2.approx));
+  return certifyScalar("volume", coeff, rf);
 }
 
 // api/_lib/kernel/compute/relative.ts
@@ -6287,10 +6806,224 @@ function lineEquationText(l) {
   ].join(", ");
 }
 
+// api/_lib/kernel/compute/relations.ts
+var FLOAT_EPS = EPS3;
+function decideZero(s) {
+  if (s.exact !== null) return { zero: s.exact.num === 0n, exact: true };
+  if (s.sum && s.sum.terms.length > 0) return { zero: false, exact: true };
+  return { zero: Math.abs(s.approx) < FLOAT_EPS, exact: false };
+}
+function decideVecZero(v) {
+  const ds = [decideZero(v.x), decideZero(v.y), decideZero(v.z)];
+  if (ds.some((d) => d.exact && !d.zero)) return { zero: false, exact: true };
+  const allZero = ds.every((d) => d.zero);
+  const allExact = ds.every((d) => d.exact);
+  if (allZero && allExact) return { zero: true, exact: true };
+  return { zero: allZero, exact: false };
+}
+var verdict = (z, detail) => ({ holds: z.zero, certified: z.exact, detail });
+function perpVec(u, v) {
+  return verdict(decideZero(dotV(u, v)), "t\xEDch v\xF4 h\u01B0\u1EDBng hai vector");
+}
+function parallelVec(u, v) {
+  if (decideVecZero(u).zero || decideVecZero(v).zero) return { holds: false, certified: false, detail: "vector suy bi\u1EBFn (\u0111\u1ED9 d\xE0i 0)" };
+  return verdict(decideVecZero(crossV(u, v)), "t\xEDch c\xF3 h\u01B0\u1EDBng hai vector");
+}
+function collinear(a, b, c) {
+  const ab = subV(b, a), ac = subV(c, a);
+  if (decideVecZero(ab).zero && decideVecZero(ac).zero) return { holds: false, certified: false, detail: "ba \u0111i\u1EC3m tr\xF9ng nhau" };
+  return verdict(decideVecZero(crossV(ab, ac)), "t\xEDch c\xF3 h\u01B0\u1EDBng (B\u2212A)\xD7(C\u2212A)");
+}
+function coplanar4(a, b, c, d) {
+  const triple = dotV(subV(d, a), crossV(subV(b, a), subV(c, a)));
+  return verdict(decideZero(triple), "t\xEDch h\u1ED7n t\u1EA1p (D\u2212A)\xB7[(B\u2212A)\xD7(C\u2212A)]");
+}
+function pointOnLine(p2, a, b) {
+  if (decideVecZero(subV(b, a)).zero) return { holds: false, certified: false, detail: "A\u2261B: kh\xF4ng x\xE1c \u0111\u1ECBnh \u0111\u01B0\u1EDDng th\u1EB3ng" };
+  return verdict(decideVecZero(crossV(subV(p2, a), subV(b, a))), "t\xEDch c\xF3 h\u01B0\u1EDBng (P\u2212A)\xD7(B\u2212A)");
+}
+function pointOnPlane3(p2, a, b, c) {
+  return coplanar4(a, b, c, p2);
+}
+function midpoint2(m, a, b) {
+  const twoM = scaleV(m, rat(2n));
+  const diff = subV(twoM, addV(a, b));
+  return verdict(decideVecZero(diff), "2M \u2212 A \u2212 B");
+}
+function equalLength(a, b, c, d) {
+  const diff = sub2(lenSqV(subV(b, a)), lenSqV(subV(d, c)));
+  return verdict(decideZero(diff), "|AB|\xB2 \u2212 |CD|\xB2");
+}
+function lengthRatio(a, b, c, d, p2, q2) {
+  if (p2 <= 0n || q2 <= 0n) return { holds: false, certified: false, detail: "t\u1EC9 s\u1ED1 ph\u1EA3i l\xE0 hai s\u1ED1 nguy\xEAn d\u01B0\u01A1ng" };
+  const abSq = lenSqV(subV(b, a));
+  const cdSq = lenSqV(subV(d, c));
+  const lhs = mul(abSq, rat(q2 * q2));
+  const rhs2 = mul(cdSq, rat(p2 * p2));
+  return verdict(decideZero(sub2(lhs, rhs2)), `${q2}\xB2\xB7|AB|\xB2 \u2212 ${p2}\xB2\xB7|CD|\xB2`);
+}
+var sgn = (x) => x > 0 ? 1 : x < 0 ? -1 : 0;
+function decideSign(s) {
+  if (s.exact !== null) {
+    const n = s.exact.num;
+    return { sign: n === 0n ? 0 : n > 0n ? 1 : -1, exact: true };
+  }
+  if (s.sum && s.sum.terms.length === 2) {
+    const [t1, t2] = s.sum.terms;
+    const s1 = t1.num > 0n ? 1 : -1, s2 = t2.num > 0n ? 1 : -1;
+    if (s1 === s2) return { sign: s1, exact: true };
+    const q1 = t1.num * t1.num * BigInt(t1.radicand);
+    const q2 = t2.num * t2.num * BigInt(t2.radicand);
+    return { sign: q1 > q2 ? s1 : s2, exact: true };
+  }
+  const approxSign = Math.abs(s.approx) < FLOAT_EPS ? 0 : sgn(s.approx);
+  return { sign: approxSign, exact: false };
+}
+var refuse = (detail) => ({ holds: false, certified: false, detail });
+function skewLines(a, u, c, v) {
+  if (decideVecZero(u).zero || decideVecZero(v).zero) return refuse("\u0111\u01B0\u1EDDng th\u1EB3ng suy bi\u1EBFn (vector ch\u1EC9 ph\u01B0\u01A1ng 0)");
+  const w = crossV(u, v);
+  const cz = decideVecZero(w);
+  if (!cz.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c c\xF9ng ph\u01B0\u01A1ng m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+  if (cz.zero) return { holds: false, certified: true, detail: "hai \u0111\u01B0\u1EDDng c\xF9ng ph\u01B0\u01A1ng (song song ho\u1EB7c tr\xF9ng), kh\xF4ng ch\xE9o nhau" };
+  const z = decideZero(dotV(subV(c, a), w));
+  if (!z.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c \u0111\u1ED3ng ph\u1EB3ng m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+  return z.zero ? { holds: false, certified: true, detail: "hai \u0111\u01B0\u1EDDng \u0111\u1ED3ng ph\u1EB3ng (c\u1EAFt nhau), kh\xF4ng ch\xE9o nhau" } : { holds: true, certified: true, detail: "kh\xF4ng c\xF9ng ph\u01B0\u01A1ng v\xE0 kh\xF4ng \u0111\u1ED3ng ph\u1EB3ng (t\xEDch h\u1ED7n t\u1EA1p \u2260 0)" };
+}
+function lineInPlane(a, u, p2, n) {
+  if (decideVecZero(u).zero) return refuse("\u0111\u01B0\u1EDDng th\u1EB3ng suy bi\u1EBFn (vector ch\u1EC9 ph\u01B0\u01A1ng 0)");
+  if (decideVecZero(n).zero) return refuse("m\u1EB7t ph\u1EB3ng suy bi\u1EBFn (ph\xE1p tuy\u1EBFn 0 \u2014 ba \u0111i\u1EC3m th\u1EB3ng h\xE0ng)");
+  const perp = decideZero(dotV(u, n));
+  const on = decideZero(dotV(subV(a, p2), n));
+  if (!perp.exact || !on.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c ch\xEDnh x\xE1c");
+  if (!perp.zero) return { holds: false, certified: true, detail: "\u0111\u01B0\u1EDDng c\u1EAFt m\u1EB7t (h\u01B0\u1EDBng kh\xF4ng vu\xF4ng g\xF3c ph\xE1p tuy\u1EBFn)" };
+  if (!on.zero) return { holds: false, certified: true, detail: "\u0111\u01B0\u1EDDng song song v\u1EDBi m\u1EB7t nh\u01B0ng kh\xF4ng n\u1EB1m trong m\u1EB7t" };
+  return { holds: true, certified: true, detail: "h\u01B0\u1EDBng \u22A5 ph\xE1p tuy\u1EBFn v\xE0 m\u1ED9t \u0111i\u1EC3m c\u1EE7a \u0111\u01B0\u1EDDng thu\u1ED9c m\u1EB7t" };
+}
+function angleSqOf(u, v, oriented) {
+  const zero = rat(0n);
+  if (decideVecZero(u).zero || decideVecZero(v).zero) return { num: zero, den: zero, sign: { sign: 0, exact: false }, degenerate: "vector 0 \u2014 g\xF3c kh\xF4ng x\xE1c \u0111\u1ECBnh" };
+  const d = dotV(u, v);
+  const num3 = mul(d, d);
+  const den = mul(lenSqV(u), lenSqV(v));
+  const sd = decideSign(d);
+  const sign = oriented ? sd : { sign: sd.sign === 0 ? 0 : 1, exact: sd.exact };
+  return { num: num3, den, sign };
+}
+function angleVectors(u, v) {
+  return angleSqOf(u, v, true);
+}
+function angleLines(u, v) {
+  return angleSqOf(u, v, false);
+}
+function angleLinePlane(u, n) {
+  const zero = rat(0n);
+  if (decideVecZero(u).zero || decideVecZero(n).zero) return { num: zero, den: zero, sign: { sign: 0, exact: false }, degenerate: "vector 0 \u2014 g\xF3c kh\xF4ng x\xE1c \u0111\u1ECBnh" };
+  const d = dotV(u, n);
+  const den = mul(lenSqV(u), lenSqV(n));
+  const num3 = sub2(den, mul(d, d));
+  const z = decideZero(num3);
+  return { num: num3, den, sign: { sign: z.zero ? 0 : 1, exact: z.exact } };
+}
+function equalAngle(a, b) {
+  if (a.degenerate) return refuse(a.degenerate);
+  if (b.degenerate) return refuse(b.degenerate);
+  const z = decideZero(sub2(mul(a.num, b.den), mul(b.num, a.den)));
+  if (!z.exact) return refuse("kh\xF4ng so \u0111\u01B0\u1EE3c b\xECnh ph\u01B0\u01A1ng cosin m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+  if (!z.zero) return { holds: false, certified: true, detail: "b\xECnh ph\u01B0\u01A1ng cosin kh\xE1c nhau" };
+  if (!a.sign.exact || !b.sign.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c d\u1EA5u cosin m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+  if (a.sign.sign !== b.sign.sign) return { holds: false, certified: true, detail: "c\xF9ng b\xECnh ph\u01B0\u01A1ng cosin nh\u01B0ng kh\xE1c d\u1EA5u (m\u1ED9t g\xF3c nh\u1ECDn, m\u1ED9t g\xF3c t\xF9)" };
+  return { holds: true, certified: true, detail: "b\xECnh ph\u01B0\u01A1ng cosin b\u1EB1ng nhau v\xE0 c\xF9ng d\u1EA5u" };
+}
+function distSqPointPoint(p2, q2) {
+  return { num: lenSqV(subV(q2, p2)), den: rat(1n) };
+}
+function distSqPointLine(p2, a, u) {
+  if (decideVecZero(u).zero) return { num: rat(0n), den: rat(0n), degenerate: "\u0111\u01B0\u1EDDng th\u1EB3ng suy bi\u1EBFn (vector ch\u1EC9 ph\u01B0\u01A1ng 0)" };
+  return { num: lenSqV(crossV(subV(p2, a), u)), den: lenSqV(u) };
+}
+function distSqPointPlane(p2, q2, n) {
+  if (decideVecZero(n).zero) return { num: rat(0n), den: rat(0n), degenerate: "m\u1EB7t ph\u1EB3ng suy bi\u1EBFn (ph\xE1p tuy\u1EBFn 0)" };
+  const d = dotV(subV(p2, q2), n);
+  return { num: mul(d, d), den: lenSqV(n) };
+}
+function equalDistance(a, b) {
+  if (a.degenerate) return refuse(a.degenerate);
+  if (b.degenerate) return refuse(b.degenerate);
+  return verdict(decideZero(sub2(mul(a.num, b.den), mul(b.num, a.den))), "so b\xECnh ph\u01B0\u01A1ng kho\u1EA3ng c\xE1ch (nh\xE2n ch\xE9o)");
+}
+function equidistantPoints(p2, qs) {
+  if (qs.length < 2) return refuse('c\u1EA7n \xEDt nh\u1EA5t hai \u0111i\u1EC3m \u0111\u1EC3 n\xF3i "c\xE1ch \u0111\u1EC1u"');
+  for (let i = 1; i < qs.length; i++) {
+    const r2 = equalLength(p2, qs[0], p2, qs[i]);
+    if (!r2.certified) return refuse("kh\xF4ng so \u0111\u01B0\u1EE3c b\xECnh ph\u01B0\u01A1ng kho\u1EA3ng c\xE1ch m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+    if (!r2.holds) return { holds: false, certified: true, detail: `|PQ\u2081|\xB2 \u2260 |PQ${i + 1}|\xB2` };
+  }
+  return { holds: true, certified: true, detail: `b\xECnh ph\u01B0\u01A1ng kho\u1EA3ng c\xE1ch t\u1EDBi ${qs.length} \u0111i\u1EC3m b\u1EB1ng nhau` };
+}
+function concurrentLines(lines) {
+  if (lines.length < 2) return refuse("c\u1EA7n \xEDt nh\u1EA5t hai \u0111\u01B0\u1EDDng th\u1EB3ng");
+  for (const l of lines) if (decideVecZero(l.u).zero) return refuse("c\xF3 \u0111\u01B0\u1EDDng th\u1EB3ng suy bi\u1EBFn (vector ch\u1EC9 ph\u01B0\u01A1ng 0)");
+  let bi = -1, bj = -1;
+  for (let i = 0; i < lines.length && bi < 0; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const cz = decideVecZero(crossV(lines[i].u, lines[j].u));
+      if (!cz.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c c\xF9ng ph\u01B0\u01A1ng m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+      if (!cz.zero) {
+        bi = i;
+        bj = j;
+        break;
+      }
+      const on = decideVecZero(crossV(subV(lines[j].a, lines[i].a), lines[i].u));
+      if (!on.exact) return refuse("kh\xF4ng ph\xE2n bi\u1EC7t \u0111\u01B0\u1EE3c tr\xF9ng/song song m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+      if (!on.zero) return { holds: false, certified: true, detail: `\u0111\u01B0\u1EDDng th\u1EE9 ${i + 1} v\xE0 th\u1EE9 ${j + 1} song song ph\xE2n bi\u1EC7t \u21D2 kh\xF4ng \u0111\u1ED3ng quy` };
+    }
+  }
+  if (bi < 0) return refuse("m\u1ECDi \u0111\u01B0\u1EDDng th\u1EB3ng tr\xF9ng nhau \u2014 kh\xF4ng x\xE1c \u0111\u1ECBnh giao \u0111i\u1EC3m");
+  const { a, u } = lines[bi], { a: c, u: v } = lines[bj];
+  const w = crossV(u, v);
+  const cop = decideZero(dotV(subV(c, a), w));
+  if (!cop.exact) return refuse("kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c \u0111\u1ED3ng ph\u1EB3ng m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+  if (!cop.zero) return { holds: false, certified: true, detail: `\u0111\u01B0\u1EDDng th\u1EE9 ${bi + 1} v\xE0 th\u1EE9 ${bj + 1} ch\xE9o nhau \u21D2 kh\xF4ng \u0111\u1ED3ng quy` };
+  const N = dotV(crossV(subV(c, a), v), w);
+  const D = lenSqV(w);
+  for (let k = 0; k < lines.length; k++) {
+    if (k === bi || k === bj) continue;
+    const { a: e, u: r2 } = lines[k];
+    const lhs = addV(scaleV(crossV(subV(a, e), r2), D), scaleV(crossV(u, r2), N));
+    const z = decideVecZero(lhs);
+    if (!z.exact) return refuse("kh\xF4ng ki\u1EC3m \u0111\u01B0\u1EE3c giao \u0111i\u1EC3m chung m\u1ED9t c\xE1ch ch\xEDnh x\xE1c");
+    if (!z.zero) return { holds: false, certified: true, detail: `\u0111\u01B0\u1EDDng th\u1EE9 ${k + 1} kh\xF4ng \u0111i qua giao \u0111i\u1EC3m c\u1EE7a hai \u0111\u01B0\u1EDDng \u0111\u1EA7u` };
+  }
+  return { holds: true, certified: true, detail: `${lines.length} \u0111\u01B0\u1EDDng th\u1EB3ng c\xF9ng \u0111i qua m\u1ED9t \u0111i\u1EC3m` };
+}
+
 // api/_lib/kernel/compute/query.ts
 var Tok = external_exports.string().min(1);
-var SolidSpec = external_exports.object({ solid: external_exports.enum(["tetrahedron", "pyramid"]), points: external_exports.array(Tok).min(3), apex: Tok.optional() });
-var QueryESchema = external_exports.union([
+var ScalarInput = external_exports.union([external_exports.number(), external_exports.string().min(1)]);
+var SolidSpec = external_exports.union([
+  external_exports.object({ solid: external_exports.enum(["tetrahedron", "pyramid"]), points: external_exports.array(Tok).min(3), apex: Tok.optional() }),
+  external_exports.object({ solid: external_exports.literal("prism"), base: external_exports.array(Tok).min(3), top: external_exports.array(Tok).min(3) }),
+  external_exports.object({ solid: external_exports.literal("convex_hull"), points: external_exports.array(Tok).min(4) })
+]);
+var LinearArg = external_exports.union([
+  external_exports.object({ line: external_exports.tuple([Tok, Tok]) }),
+  external_exports.object({ plane: external_exports.array(Tok).min(3) }),
+  external_exports.object({ entity: Tok })
+]);
+var PosInt = external_exports.number().int().positive();
+var Pair = external_exports.tuple([Tok, Tok]);
+var LineArg = external_exports.union([external_exports.object({ line: Pair }), external_exports.object({ entity: Tok })]);
+var PlaneArg = external_exports.union([external_exports.object({ plane: external_exports.array(Tok).min(3) }), external_exports.object({ entity: Tok })]);
+var AngleArg = external_exports.union([
+  external_exports.object({ points: external_exports.tuple([Tok, Tok, Tok]) }),
+  external_exports.object({ a: LinearArg, b: LinearArg })
+]);
+var DistArg = external_exports.union([
+  external_exports.object({ point: Tok, to: LinearArg }),
+  external_exports.object({ points: Pair })
+]);
+var QueryEBase = external_exports.union([
   external_exports.object({ kind: external_exports.literal("distance"), a: Tok, b: Tok }),
   external_exports.object({ kind: external_exports.literal("angle"), a: Tok, b: Tok }),
   external_exports.object({ kind: external_exports.literal("relative_position"), a: Tok, b: Tok }),
@@ -6299,12 +7032,43 @@ var QueryESchema = external_exports.union([
   external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.literal("sphere"), target: Tok }),
   external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.enum(["tetrahedron", "pyramid"]), points: external_exports.array(Tok).min(3), apex: Tok.optional() }),
   external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.literal("prism"), base: external_exports.array(Tok).min(3), top: external_exports.array(Tok).min(3) }),
+  // KHỐI ĐA DIỆN LỒI có các đỉnh cho trước ("khối đa diện lồi có các đỉnh là A, B, C, M, N, P"): engine
+  // tự dựng các mặt của bao lồi rồi tính thể tích CHÍNH XÁC — không cần khối dịch xẻ khối (dễ thiếu mảnh)
+  // hay thay bằng khối gần giống (chóp cụt cho nắp bị xoay — sai).
+  external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.literal("convex_hull"), points: external_exports.array(Tok).min(4) }),
+  external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.enum(["cone", "cylinder"]), r: ScalarInput, h: ScalarInput }),
+  external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.literal("cone_frustum"), R: ScalarInput, r: ScalarInput, h: ScalarInput }),
+  external_exports.object({ kind: external_exports.literal("volume"), solid: external_exports.literal("pyramid_frustum"), s1: ScalarInput, s2: ScalarInput, h: ScalarInput }),
   external_exports.object({ kind: external_exports.literal("volume_ratio"), a: SolidSpec, b: SolidSpec }),
   external_exports.object({ kind: external_exports.literal("area"), shape: external_exports.literal("sphere"), target: Tok }),
   external_exports.object({ kind: external_exports.literal("area"), shape: external_exports.enum(["triangle", "polygon"]), points: external_exports.array(Tok).min(3) }),
-  external_exports.object({ kind: external_exports.literal("sphere_metric"), target: Tok, what: external_exports.enum(["radius", "top_z", "bottom_z"]) }),
-  external_exports.object({ kind: external_exports.literal("point_coord"), target: Tok, axis: external_exports.enum(["x", "y", "z"]) })
+  external_exports.object({ kind: external_exports.literal("area"), shape: external_exports.enum(["cone", "cylinder"]), part: external_exports.enum(["lateral", "total"]), r: ScalarInput, h: ScalarInput }),
+  external_exports.object({ kind: external_exports.literal("area"), shape: external_exports.literal("cone_frustum"), part: external_exports.enum(["lateral", "total"]), R: ScalarInput, r: ScalarInput, h: ScalarInput }),
+  external_exports.object({ kind: external_exports.literal("slant"), r: ScalarInput, h: ScalarInput, R: ScalarInput.optional() }),
+  external_exports.object({ kind: external_exports.literal("sphere_metric"), target: Tok, what: external_exports.enum(["radius", "diameter", "top_z", "bottom_z"]) }),
+  external_exports.object({ kind: external_exports.literal("point_coord"), target: Tok, axis: external_exports.enum(["x", "y", "z"]) }),
+  // CHỨNG MINH QUAN HỆ: quyết định một mệnh đề kết luận bằng SỐ HỌC CHÍNH XÁC (perpVec/crossV = 0…).
+  // Trả "Đúng"/"Sai" đã chứng nhận; nếu không quyết định được chính xác thì computeQuery TỪ CHỐI.
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.enum(["perpendicular", "parallel"]), a: LinearArg, b: LinearArg }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("collinear"), points: external_exports.array(Tok).length(3) }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("coplanar"), points: external_exports.array(Tok).min(4) }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("point_on_line"), point: Tok, line: Pair }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("point_on_plane"), point: Tok, plane: external_exports.array(Tok).min(3) }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("midpoint"), point: Tok, of: Pair }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("equal_length"), a: Pair, b: Pair }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("ratio"), a: Pair, b: Pair, value: external_exports.tuple([PosInt, PosInt]) }),
+  // Mở rộng SGK 11: chéo nhau, đường ⊂ mặt, góc bằng nhau, khoảng cách bằng nhau, cách đều, đồng quy.
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("skew"), a: LineArg, b: LineArg }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("line_in_plane"), line: LineArg, plane: PlaneArg }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("equal_angle"), a: AngleArg, b: AngleArg }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("equal_distance"), a: DistArg, b: DistArg }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("equidistant"), point: Tok, points: external_exports.array(Tok).min(2).max(16) }),
+  external_exports.object({ kind: external_exports.literal("prove"), relation: external_exports.literal("concurrent"), lines: external_exports.array(LineArg).min(3).max(12) })
 ]);
+var QueryESchema = external_exports.lazy(() => external_exports.union([
+  QueryEBase,
+  external_exports.object({ kind: external_exports.literal("combine"), op: external_exports.enum(["sum", "diff"]), of: external_exports.array(QueryESchema).min(2).max(12) })
+]));
 function asPoints(tokens, et) {
   return tokens.map((t) => {
     const e = resolveEntityE(t, et);
@@ -6320,25 +7084,281 @@ function entityIsApprox(e) {
   return false;
 }
 function solidVolumeScalar(spec, et) {
-  const pts = asPoints(spec.points, et);
   let r2;
-  if (spec.solid === "tetrahedron") {
-    if (pts.length !== 4) throw new Error("tetrahedron needs exactly 4 points");
-    r2 = computeTetraVolume(pts[0], pts[1], pts[2], pts[3]);
+  if (spec.solid === "prism") {
+    r2 = computePrismVolume(asPoints(spec.base, et), asPoints(spec.top, et));
+  } else if (spec.solid === "convex_hull") {
+    r2 = computeConvexHullVolume(asPoints(spec.points, et));
   } else {
-    if (!spec.apex) throw new Error("pyramid needs an apex");
-    r2 = computePyramidVolume(pts, asPoints([spec.apex], et)[0]);
+    const pts = asPoints(spec.points, et);
+    if (spec.solid === "tetrahedron") {
+      if (pts.length !== 4) throw new Error("tetrahedron needs exactly 4 points");
+      r2 = computeTetraVolume(pts[0], pts[1], pts[2], pts[3]);
+    } else {
+      if (!spec.apex) throw new Error("pyramid needs an apex");
+      r2 = computePyramidVolume(pts, asPoints([spec.apex], et)[0]);
+    }
   }
   if (!r2.ok) throw new Error(r2.problem);
-  return { approx: r2.answer.approx, exact: r2.answer.exact };
+  return r2.answer.scalar ?? { approx: r2.answer.approx, exact: r2.answer.exact };
+}
+function combineSumTetrahedra(query, et) {
+  if (query.op !== "sum") return null;
+  const tokV3 = (tok) => {
+    const e = resolveEntityE(tok, et);
+    if (e.kind !== "point") throw new Error(`"${tok}" must be a point`);
+    return [e.p.x.approx, e.p.y.approx, e.p.z.approx];
+  };
+  const tetras = [];
+  for (const sub7 of query.of) {
+    const s = sub7;
+    if (s.kind !== "volume") return null;
+    if (s.solid === "tetrahedron" && s.points && s.points.length === 4) {
+      const p2 = s.points.map(tokV3);
+      tetras.push([p2[0], p2[1], p2[2], p2[3]]);
+    } else if (s.solid === "pyramid" && s.points && s.points.length >= 3 && s.apex) {
+      const base = s.points.map(tokV3);
+      const apex = tokV3(s.apex);
+      for (let i = 1; i + 1 < base.length; i++) tetras.push([base[0], base[i], base[i + 1], apex]);
+    } else {
+      return null;
+    }
+  }
+  const key = (v) => v.map((x) => Math.round(x * 1e6)).join(",");
+  const seen = /* @__PURE__ */ new Set();
+  const verts = [];
+  for (const t of tetras) for (const v of t) {
+    const k = key(v);
+    if (!seen.has(k)) {
+      seen.add(k);
+      verts.push(v);
+    }
+  }
+  return { verts, tetras };
+}
+function ptVec(tok, et) {
+  const e = resolveEntityE(tok, et);
+  if (e.kind !== "point") throw new Error(`"${tok}" ph\u1EA3i l\xE0 \u0111i\u1EC3m`);
+  return e.p;
+}
+function resolveLinear(arg, et) {
+  if ("line" in arg) {
+    const A = ptVec(arg.line[0], et);
+    return { kind: "line", v: subV(ptVec(arg.line[1], et), A), ref: A };
+  }
+  if ("plane" in arg) {
+    const A = ptVec(arg.plane[0], et), B = ptVec(arg.plane[1], et), C = ptVec(arg.plane[2], et);
+    return { kind: "plane", v: crossV(subV(B, A), subV(C, A)), ref: A };
+  }
+  const e = resolveEntityE(arg.entity, et);
+  if (e.kind === "line") return { kind: "line", v: e.dir, ref: e.p };
+  if (e.kind === "plane") return { kind: "plane", v: e.n, ref: pointOnPlaneE(e.n, e.d) };
+  throw new Error("to\xE1n h\u1EA1ng th\u1EF1c th\u1EC3 ch\u1EC9 h\u1ED7 tr\u1EE3 \u0111\u01B0\u1EDDng th\u1EB3ng / m\u1EB7t ph\u1EB3ng c\xF3 t\xEAn");
+}
+function pointOnPlaneE(n, d) {
+  const zero = rat(0n);
+  for (const axis of ["x", "y", "z"]) {
+    const zd = decideZero(n[axis]);
+    if (zd.exact && !zd.zero) {
+      const t = div(neg(d), n[axis]);
+      return vec3s(axis === "x" ? t : zero, axis === "y" ? t : zero, axis === "z" ? t : zero);
+    }
+  }
+  throw new Error("m\u1EB7t ph\u1EB3ng c\xF3 t\xEAn: ph\xE1p tuy\u1EBFn kh\xF4ng c\xF3 h\u1EC7 s\u1ED1 ch\xEDnh x\xE1c kh\xE1c 0 \u2014 t\u1EEB ch\u1ED1i");
+}
+function asLine(arg, et) {
+  const l = resolveLinear(arg, et);
+  if (l.kind !== "line") throw new Error("to\xE1n h\u1EA1ng ph\u1EA3i l\xE0 \u0111\u01B0\u1EDDng th\u1EB3ng");
+  return l;
+}
+function asPlane(arg, et) {
+  const l = resolveLinear(arg, et);
+  if (l.kind !== "plane") throw new Error("to\xE1n h\u1EA1ng ph\u1EA3i l\xE0 m\u1EB7t ph\u1EB3ng");
+  return l;
+}
+function resolveAngle(arg, et) {
+  if ("points" in arg) {
+    const [A, B, C] = arg.points.map((t) => ptVec(t, et));
+    return angleVectors(subV(A, B), subV(C, B));
+  }
+  const a = resolveLinear(arg.a, et), b = resolveLinear(arg.b, et);
+  if (a.kind === b.kind) return angleLines(a.v, b.v);
+  const line = a.kind === "line" ? a : b, plane = a.kind === "plane" ? a : b;
+  return angleLinePlane(line.v, plane.v);
+}
+function resolveDist(arg, et) {
+  if ("points" in arg) return distSqPointPoint(ptVec(arg.points[0], et), ptVec(arg.points[1], et));
+  const P = ptVec(arg.point, et);
+  const to = resolveLinear(arg.to, et);
+  return to.kind === "line" ? distSqPointLine(P, to.ref, to.v) : distSqPointPlane(P, to.ref, to.v);
+}
+function provePerpPar(rel2, a, b) {
+  const line = a.kind === "line" ? a : b.kind === "line" ? b : null;
+  const plane = a.kind === "plane" ? a : b.kind === "plane" ? b : null;
+  if (rel2 === "perpendicular") {
+    if (a.kind === b.kind) return perpVec(a.v, b.v);
+    return parallelVec(line.v, plane.v);
+  }
+  if (a.kind === "line" && b.kind === "line") {
+    const cp = parallelVec(a.v, b.v);
+    if (!cp.certified || !cp.holds) return cp;
+    const on2 = decideVecZero(crossV(subV(b.ref, a.ref), a.v));
+    if (!on2.exact) return { holds: false, certified: false, detail: "kh\xF4ng ph\xE2n bi\u1EC7t \u0111\u01B0\u1EE3c tr\xF9ng/kh\xE1c \u0111\u01B0\u1EDDng ch\xEDnh x\xE1c" };
+    return on2.zero ? { holds: false, certified: true, detail: "hai \u0111\u01B0\u1EDDng TR\xD9NG nhau, kh\xF4ng ph\u1EA3i song song" } : { holds: true, certified: true, detail: "c\xF9ng ph\u01B0\u01A1ng v\xE0 ph\xE2n bi\u1EC7t" };
+  }
+  if (a.kind === "plane" && b.kind === "plane") {
+    const cp = parallelVec(a.v, b.v);
+    if (!cp.certified || !cp.holds) return cp;
+    const on2 = decideZero(dotV(subV(b.ref, a.ref), a.v));
+    if (!on2.exact) return { holds: false, certified: false };
+    return on2.zero ? { holds: false, certified: true, detail: "hai m\u1EB7t TR\xD9NG nhau" } : { holds: true, certified: true };
+  }
+  const L = line, P = plane;
+  const perp = perpVec(L.v, P.v);
+  if (!perp.certified || !perp.holds) return perp;
+  const on = decideZero(dotV(subV(L.ref, P.ref), P.v));
+  if (!on.exact) return { holds: false, certified: false };
+  return on.zero ? { holds: false, certified: true, detail: "\u0111\u01B0\u1EDDng N\u1EB0M TR\xCAN m\u1EB7t, kh\xF4ng ph\u1EA3i song song" } : { holds: true, certified: true };
+}
+function coplanarMany(pts) {
+  const A = pts[0];
+  let bi = -1, ci = -1;
+  for (let i = 1; i < pts.length && bi < 0; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const cl = collinear(A, pts[i], pts[j]);
+      if (cl.certified && !cl.holds) {
+        bi = i;
+        ci = j;
+        break;
+      }
+    }
+  }
+  if (bi < 0) return { holds: false, certified: false, detail: "kh\xF4ng t\xECm \u0111\u01B0\u1EE3c ba \u0111i\u1EC3m kh\xF4ng th\u1EB3ng h\xE0ng (ch\xEDnh x\xE1c) \u0111\u1EC3 x\xE1c \u0111\u1ECBnh m\u1EB7t" };
+  for (let k = 1; k < pts.length; k++) {
+    if (k === bi || k === ci) continue;
+    const cp = coplanar4(A, pts[bi], pts[ci], pts[k]);
+    if (!cp.certified) return { holds: false, certified: false };
+    if (!cp.holds) return { holds: false, certified: true, detail: `\u0111i\u1EC3m th\u1EE9 ${k + 1} kh\xF4ng \u0111\u1ED3ng ph\u1EB3ng` };
+  }
+  return { holds: true, certified: true };
+}
+var REL_LABEL = {
+  perpendicular: "vu\xF4ng g\xF3c",
+  parallel: "song song",
+  collinear: "th\u1EB3ng h\xE0ng",
+  coplanar: "\u0111\u1ED3ng ph\u1EB3ng",
+  point_on_line: "\u0111i\u1EC3m thu\u1ED9c \u0111\u01B0\u1EDDng th\u1EB3ng",
+  point_on_plane: "\u0111i\u1EC3m thu\u1ED9c m\u1EB7t ph\u1EB3ng",
+  midpoint: "trung \u0111i\u1EC3m",
+  equal_length: "hai \u0111o\u1EA1n b\u1EB1ng nhau",
+  ratio: "t\u1EC9 s\u1ED1 \u0111\u1ED9 d\xE0i",
+  skew: "hai \u0111\u01B0\u1EDDng th\u1EB3ng ch\xE9o nhau",
+  line_in_plane: "\u0111\u01B0\u1EDDng th\u1EB3ng n\u1EB1m trong m\u1EB7t ph\u1EB3ng",
+  equal_angle: "hai g\xF3c b\u1EB1ng nhau",
+  equal_distance: "hai kho\u1EA3ng c\xE1ch b\u1EB1ng nhau",
+  equidistant: "\u0111i\u1EC3m c\xE1ch \u0111\u1EC1u",
+  concurrent: "c\xE1c \u0111\u01B0\u1EDDng th\u1EB3ng \u0111\u1ED3ng quy"
+};
+function computeProve(query, et) {
+  let v;
+  switch (query.relation) {
+    case "perpendicular":
+    case "parallel":
+      v = provePerpPar(query.relation, resolveLinear(query.a, et), resolveLinear(query.b, et));
+      break;
+    case "collinear": {
+      const [A, B, C] = query.points.map((t) => ptVec(t, et));
+      v = collinear(A, B, C);
+      break;
+    }
+    case "coplanar":
+      v = coplanarMany(query.points.map((t) => ptVec(t, et)));
+      break;
+    case "point_on_line":
+      v = pointOnLine(ptVec(query.point, et), ptVec(query.line[0], et), ptVec(query.line[1], et));
+      break;
+    case "point_on_plane":
+      v = pointOnPlane3(ptVec(query.point, et), ptVec(query.plane[0], et), ptVec(query.plane[1], et), ptVec(query.plane[2], et));
+      break;
+    case "midpoint":
+      v = midpoint2(ptVec(query.point, et), ptVec(query.of[0], et), ptVec(query.of[1], et));
+      break;
+    case "equal_length":
+      v = equalLength(ptVec(query.a[0], et), ptVec(query.a[1], et), ptVec(query.b[0], et), ptVec(query.b[1], et));
+      break;
+    case "ratio":
+      v = lengthRatio(ptVec(query.a[0], et), ptVec(query.a[1], et), ptVec(query.b[0], et), ptVec(query.b[1], et), BigInt(query.value[0]), BigInt(query.value[1]));
+      break;
+    case "skew": {
+      const a = asLine(query.a, et), b = asLine(query.b, et);
+      v = skewLines(a.ref, a.v, b.ref, b.v);
+      break;
+    }
+    case "line_in_plane": {
+      const l = asLine(query.line, et), p2 = asPlane(query.plane, et);
+      v = lineInPlane(l.ref, l.v, p2.ref, p2.v);
+      break;
+    }
+    case "equal_angle":
+      v = equalAngle(resolveAngle(query.a, et), resolveAngle(query.b, et));
+      break;
+    case "equal_distance":
+      v = equalDistance(resolveDist(query.a, et), resolveDist(query.b, et));
+      break;
+    case "equidistant":
+      v = equidistantPoints(ptVec(query.point, et), query.points.map((t) => ptVec(t, et)));
+      break;
+    case "concurrent":
+      v = concurrentLines(query.lines.map((l) => {
+        const L = asLine(l, et);
+        return { a: L.ref, u: L.v };
+      }));
+      break;
+    default:
+      return { ok: false, problem: `quan h\u1EC7 ch\u1EE9ng minh kh\xF4ng h\u1ED7 tr\u1EE3: ${query.relation}` };
+  }
+  const label = REL_LABEL[query.relation] ?? query.relation;
+  if (!v.certified) return { ok: false, problem: `kh\xF4ng ch\u1EE9ng nh\u1EADn \u0111\u01B0\u1EE3c "${label}" b\u1EB1ng s\u1ED1 h\u1ECDc ch\xEDnh x\xE1c tr\xEAn m\xF4 h\xECnh n\xE0y \u2014 t\u1EEB ch\u1ED1i` };
+  const text = `${v.holds ? "\u0110\xFAng" : "Sai"}: ${label}${v.detail ? ` (${v.detail})` : ""}`;
+  return { ok: true, answer: { kind: "prove", relation: query.relation, holds: v.holds, text, approximate: false, detail: v.detail } };
 }
 function computeQuery(query, et) {
   try {
     switch (query.kind) {
+      case "combine": {
+        const ZERO5 = rat(0n);
+        const parts = [];
+        for (const sub7 of query.of) {
+          const r2 = computeQuery(sub7, et);
+          if (!r2.ok) return r2;
+          const a = r2.answer;
+          if (!a || !a.scalar && !a.piCoeff || typeof a.approx !== "number") {
+            return { ok: false, problem: "combine ch\u1EC9 g\u1ED9p \u0111\u01B0\u1EE3c \u0111\u1EA1i l\u01B0\u1EE3ng S\u1ED0 (kho\u1EA3ng c\xE1ch, di\u1EC7n t\xEDch, th\u1EC3 t\xEDch\u2026)" };
+          }
+          parts.push({ plain: a.scalar ?? ZERO5, pi: a.piCoeff ?? ZERO5, approx: a.approx, kind: a.kind ?? "combine" });
+        }
+        let plainTotal = parts[0].plain, piTotal = parts[0].pi;
+        let floatRef = parts[0].approx;
+        for (let i = 1; i < parts.length; i++) {
+          plainTotal = query.op === "sum" ? add2(plainTotal, parts[i].plain) : sub2(plainTotal, parts[i].plain);
+          piTotal = query.op === "sum" ? add2(piTotal, parts[i].pi) : sub2(piTotal, parts[i].pi);
+          floatRef = query.op === "sum" ? floatRef + parts[i].approx : floatRef - parts[i].approx;
+        }
+        const decomp = combineSumTetrahedra(query, et);
+        if (decomp) {
+          const cov = coverageFraction(decomp.verts, decomp.tetras);
+          if (cov < COVERAGE_MIN) {
+            return { ok: false, problem: `ph\u1EA7n r\xE3 kh\u1ED1i kh\xF4ng l\u1EA5p k\xEDn (ph\u1EE7 ${(cov * 100).toFixed(0)}%) \u2014 c\xF3 th\u1EC3 thi\u1EBFu m\u1EA3nh; t\u1EEB ch\u1ED1i ch\u1EE9ng nh\u1EADn` };
+          }
+        }
+        return { ok: true, answer: mixedPiScalarAnswer(parts[0].kind, plainTotal, piTotal, floatRef) };
+      }
       case "distance":
         return computeDistance(resolveEntityE(query.a, et), resolveEntityE(query.b, et));
       case "angle":
         return computeAngle(resolveEntityE(query.a, et), resolveEntityE(query.b, et));
+      case "prove":
+        return computeProve(query, et);
       case "relative_position":
         return computeRelativePosition(resolveEntityE(query.a, et), resolveEntityE(query.b, et));
       case "intersection":
@@ -6358,6 +7378,11 @@ function computeQuery(query, et) {
         if (query.solid === "prism") {
           return computePrismVolume(asPoints(query.base, et), asPoints(query.top, et));
         }
+        if (query.solid === "convex_hull") return computeConvexHullVolume(asPoints(query.points, et));
+        if (query.solid === "cone") return { ok: true, answer: coneVolume(query.r, query.h) };
+        if (query.solid === "cylinder") return { ok: true, answer: cylinderVolume(query.r, query.h) };
+        if (query.solid === "cone_frustum") return { ok: true, answer: coneFrustumVolume(query.R, query.r, query.h) };
+        if (query.solid === "pyramid_frustum") return { ok: true, answer: pyramidFrustumVolume(query.s1, query.s2, query.h) };
         const pts = asPoints(query.points, et);
         if (query.solid === "tetrahedron") {
           if (pts.length !== 4) return { ok: false, problem: "tetrahedron needs exactly 4 points" };
@@ -6374,6 +7399,9 @@ function computeQuery(query, et) {
           if (e.kind !== "sphere") return { ok: false, problem: "area(sphere) needs a sphere" };
           return { ok: true, answer: computeSphereArea(e) };
         }
+        if (query.shape === "cone") return { ok: true, answer: coneArea(query.r, query.h, query.part) };
+        if (query.shape === "cylinder") return { ok: true, answer: cylinderArea(query.r, query.h, query.part) };
+        if (query.shape === "cone_frustum") return { ok: true, answer: coneFrustumArea(query.R, query.r, query.h, query.part) };
         const pts = asPoints(query.points, et);
         if (query.shape === "triangle") {
           if (pts.length !== 3) return { ok: false, problem: "triangle area needs exactly 3 points" };
@@ -6384,10 +7412,15 @@ function computeQuery(query, et) {
       case "sphere_metric": {
         const e = resolveEntityE(query.target, et);
         if (e.kind !== "sphere") return { ok: false, problem: "sphere_metric needs a sphere" };
-        const R = Math.sqrt(e.r2.approx);
-        const val = query.what === "radius" ? R : query.what === "top_z" ? e.center.z.approx + R : e.center.z.approx - R;
-        return { ok: true, answer: { kind: "sphere_metric", exact: null, approx: val, text: val.toFixed(4), approximate: true } };
+        const R = sqrt(e.r2);
+        const Rf = Math.sqrt(e.r2.approx);
+        const zc = e.center.z;
+        const s = query.what === "radius" ? R : query.what === "diameter" ? mul(rat(2n), R) : query.what === "top_z" ? add2(zc, R) : sub2(zc, R);
+        const ref = query.what === "radius" ? Rf : query.what === "diameter" ? 2 * Rf : query.what === "top_z" ? zc.approx + Rf : zc.approx - Rf;
+        return { ok: true, answer: certifyScalar("sphere_metric", s, ref) };
       }
+      case "slant":
+        return { ok: true, answer: query.R != null ? coneFrustumSlant(query.R, query.r, query.h) : coneSlant(query.r, query.h) };
       case "point_coord": {
         const e = resolveEntityE(query.target, et);
         if (e.kind !== "point") return { ok: false, problem: "point_coord needs a point" };
@@ -6405,6 +7438,32 @@ var DIST_TOL = 1e-6;
 var ANGLE_TOL = 1e-3;
 function assertValueNum(v) {
   return typeof v === "number" ? v : parseScalar(v).approx;
+}
+var PAIR_RE = /^([A-Z]\d*'?)([A-Z]\d*'?)$/;
+function rayAngleDeg(t1, t2, et) {
+  const m1 = t1.match(PAIR_RE), m2 = t2.match(PAIR_RE);
+  if (!m1 || !m2) return null;
+  const a = [m1[1], m1[2]], b = [m2[1], m2[2]];
+  const vertex = a.find((n) => b.includes(n));
+  if (!vertex) return null;
+  const other1 = a.find((n) => n !== vertex), other2 = b.find((n) => n !== vertex);
+  if (!other1 || !other2) return null;
+  let O, P, Q;
+  try {
+    const eo = resolveEntityE(vertex, et), e1 = resolveEntityE(other1, et), e2 = resolveEntityE(other2, et);
+    if (eo.kind !== "point" || e1.kind !== "point" || e2.kind !== "point") return null;
+    O = eo;
+    P = e1;
+    Q = e2;
+  } catch {
+    return null;
+  }
+  const u = [P.p.x.approx - O.p.x.approx, P.p.y.approx - O.p.y.approx, P.p.z.approx - O.p.z.approx];
+  const v = [Q.p.x.approx - O.p.x.approx, Q.p.y.approx - O.p.y.approx, Q.p.z.approx - O.p.z.approx];
+  const nu = Math.hypot(u[0], u[1], u[2]), nv = Math.hypot(v[0], v[1], v[2]);
+  if (nu < EPS3 || nv < EPS3) return null;
+  const c = (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / (nu * nv);
+  return Math.acos(Math.min(1, Math.max(-1, c))) * 180 / Math.PI;
 }
 function fail(relation, args, message) {
   return { kind: "assert_failed", relation, args, message };
@@ -6446,7 +7505,11 @@ function verifyAssertE(assert, et) {
     case "angle": {
       const ans2 = mustOk(computeAngle(resolveEntityE(args[0], et), resolveEntityE(args[1], et)));
       const tol = assert.tolerance ?? ANGLE_TOL;
-      return Math.abs(ans2.degrees - assertValueNum(assert.value)) < tol ? null : fail("angle", args, `angle(${args[0]},${args[1]})=${ans2.degrees.toFixed(4)}\xB0, expected ${assert.value}\xB0`);
+      const want = assertValueNum(assert.value);
+      if (Math.abs(ans2.degrees - want) < tol) return null;
+      const ray = rayAngleDeg(args[0], args[1], et);
+      if (ray !== null && Math.abs(ray - want) < tol) return null;
+      return fail("angle", args, `angle(${args[0]},${args[1]})=${ans2.degrees.toFixed(4)}\xB0${ray !== null ? ` (gi\u1EEFa hai tia: ${ray.toFixed(4)}\xB0)` : ""}, expected ${assert.value}\xB0`);
     }
     case "coplanar": {
       const pts = args.map((t) => resolveEntityE(t, et));
@@ -6497,6 +7560,641 @@ function run(rawPlan) {
   }
   trace.push(`computed ${answers.length}/${plan.queries.length} queries`);
   return { ok: violations.length === 0 && errors.length === 0, entities, answers, violations, errors, trace };
+}
+
+// api/_lib/kernel/proveGeneral.ts
+var CoordExpr = external_exports.union([external_exports.string().min(1), external_exports.number()]);
+var RelationSpec = external_exports.object({ relation: external_exports.string().min(1) }).passthrough();
+var ProveGeneralPlanSchema = external_exports.object({
+  mode: external_exports.literal("prove"),
+  solidName: external_exports.string().optional(),
+  claim: external_exports.string().optional(),
+  // phát biểu người đọc (hiển thị)
+  params: external_exports.array(external_exports.object({
+    name: external_exports.string().regex(/^[a-z][a-z0-9]{0,3}$/i),
+    // chữ cái đầu, ≤4 ký tự, không đụng point (HOA)
+    positive: external_exports.boolean().optional(),
+    min: external_exports.number().optional(),
+    max: external_exports.number().optional()
+  })).min(1).max(16),
+  points: external_exports.array(external_exports.object({
+    name: external_exports.string().regex(/^[A-Z]\d*'?$/),
+    // tên điểm HOA, khớp quy ước engine
+    at: external_exports.tuple([CoordExpr, CoordExpr, CoordExpr])
+  })).min(3).max(24),
+  ops: external_exports.array(external_exports.record(external_exports.string(), external_exports.unknown())).max(24).optional(),
+  asserts: external_exports.array(external_exports.record(external_exports.string(), external_exports.unknown())).max(24).optional(),
+  // MỚI (tuỳ chọn, tương thích ngược): giả thiết kiểm CHÍNH XÁC mỗi thể hiện; quan hệ đề KHÔNG giả thiết.
+  hypotheses: external_exports.array(RelationSpec).max(24).optional(),
+  notAssumed: external_exports.array(RelationSpec).max(24).optional(),
+  prove: RelationSpec,
+  trials: external_exports.number().int().min(4).max(64).optional(),
+  seed: external_exports.number().optional(),
+  maxAttempts: external_exports.number().int().min(8).max(4096).optional(),
+  domain: external_exports.object({
+    min: external_exports.number().optional(),
+    max: external_exports.number().optional(),
+    maxDen: external_exports.number().int().min(1).max(16).optional()
+  }).optional(),
+  maxHypothesisViolationRate: external_exports.number().min(0).max(1).optional(),
+  requireSpatial: external_exports.boolean().optional()
+});
+function mulberry322(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function substitute(expr, sample) {
+  let s = expr;
+  const names = Object.keys(sample).sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    s = s.replace(new RegExp("(?<![A-Za-z0-9])" + name + "(?![A-Za-z0-9])", "g"), "(" + sample[name] + ")");
+  }
+  return s;
+}
+var DEFAULT_DOMAIN = { min: -20, max: 20, maxDen: 4 };
+function paramRange(spec, den, dom) {
+  let lo = spec.min ?? (spec.positive ? Math.max(1, dom.min) : dom.min);
+  let hi = spec.max ?? dom.max;
+  if (spec.positive && lo < 1 / den) lo = 1 / den;
+  if (hi < lo) hi = lo;
+  return { nlo: Math.ceil(lo * den), nhi: Math.floor(hi * den) };
+}
+function sampleParam(spec, rnd4, dom) {
+  const den = 1 + Math.floor(rnd4() * dom.maxDen);
+  const { nlo, nhi } = paramRange(spec, den, dom);
+  let n = nlo + Math.floor(rnd4() * (nhi - nlo + 1));
+  if (n === 0) n = spec.positive ? 1 : rnd4() < 0.5 ? 1 : -1;
+  if (spec.positive && n <= 0) n = 1;
+  return `${n}/${den}`;
+}
+function gcd2(a, b) {
+  a = Math.abs(a);
+  b = Math.abs(b);
+  while (b) [a, b] = [b, a % b];
+  return a || 1;
+}
+function paramPointMass(spec, dom) {
+  const mass = /* @__PURE__ */ new Map();
+  const addMass = (n, den, p2) => {
+    const g = gcd2(n, den);
+    const k = `${n / g}/${den / g}`;
+    mass.set(k, (mass.get(k) ?? 0) + p2);
+  };
+  for (let den = 1; den <= dom.maxDen; den++) {
+    const { nlo, nhi } = paramRange(spec, den, dom);
+    const count = Math.max(1, nhi - nlo + 1);
+    const pEach = 1 / dom.maxDen / count;
+    for (let n = nlo; n < nlo + count; n++) {
+      if (n === 0) {
+        if (spec.positive) addMass(1, den, pEach);
+        else {
+          addMass(1, den, pEach / 2);
+          addMass(-1, den, pEach / 2);
+        }
+      } else if (spec.positive && n < 0) addMass(1, den, pEach);
+      else addMass(n, den, pEach);
+    }
+  }
+  let mu = 0;
+  for (const p2 of mass.values()) if (p2 > mu) mu = p2;
+  return mu;
+}
+function tokenizeExpr(s) {
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (/[0-9.]/.test(c)) {
+      let n = "";
+      while (i < s.length && /[0-9.]/.test(s[i])) n += s[i++];
+      out.push({ t: "num", v: n });
+      continue;
+    }
+    if (/[A-Za-z]/.test(c)) {
+      let w = "";
+      while (i < s.length && /[A-Za-z0-9]/.test(s[i])) w += s[i++];
+      out.push({ t: "id", v: w });
+      continue;
+    }
+    if ("+-*/^".includes(c)) {
+      out.push({ t: "op", v: c });
+      i++;
+      continue;
+    }
+    if (c === "(") {
+      out.push({ t: "lp", v: c });
+      i++;
+      continue;
+    }
+    if (c === ")") {
+      out.push({ t: "rp", v: c });
+      i++;
+      continue;
+    }
+    return null;
+  }
+  return out;
+}
+function exprDegree(src, params) {
+  if (typeof src === "number") return 0;
+  const tk = tokenizeExpr(src);
+  if (!tk || tk.length === 0) return null;
+  let i = 0;
+  const peek = () => tk[i];
+  const startsUnit = () => {
+    const x = peek();
+    return !!x && (x.t === "num" || x.t === "id" || x.t === "lp");
+  };
+  const fail4 = () => {
+    throw new Error("deg");
+  };
+  function unit() {
+    const x = peek();
+    if (!x) return fail4();
+    if (x.t === "op" && (x.v === "-" || x.v === "+")) {
+      i++;
+      return unit();
+    }
+    if (x.t === "num") {
+      i++;
+      return 0;
+    }
+    if (x.t === "id") {
+      i++;
+      if (x.v.toLowerCase() === "sqrt") {
+        if (!peek() || peek().t !== "lp") return fail4();
+        i++;
+        const inner = expr();
+        if (!peek() || peek().t !== "rp") return fail4();
+        i++;
+        return inner === 0 ? 0 : null;
+      }
+      if (params.has(x.v)) return 1;
+      return fail4();
+    }
+    if (x.t === "lp") {
+      i++;
+      const inner = expr();
+      if (!peek() || peek().t !== "rp") return fail4();
+      i++;
+      return inner;
+    }
+    return fail4();
+  }
+  function power() {
+    const base = unit();
+    if (peek() && peek().t === "op" && peek().v === "^") {
+      i++;
+      const e = peek();
+      if (!e || e.t !== "num" || !/^\d+$/.test(e.v)) return fail4();
+      i++;
+      return base === null ? null : base * Number(e.v);
+    }
+    return base;
+  }
+  function term() {
+    let acc = power();
+    for (; ; ) {
+      const x = peek();
+      if (x && x.t === "op" && (x.v === "*" || x.v === "/")) {
+        i++;
+        const rhs2 = power();
+        if (x.v === "*") acc = acc === null || rhs2 === null ? null : acc + rhs2;
+        else acc = rhs2 === 0 && acc !== null ? acc : null;
+      } else if (startsUnit()) {
+        const rhs2 = power();
+        acc = acc === null || rhs2 === null ? null : acc + rhs2;
+      } else return acc;
+    }
+  }
+  function expr() {
+    let acc = term();
+    for (; ; ) {
+      const x = peek();
+      if (x && x.t === "op" && (x.v === "+" || x.v === "-")) {
+        i++;
+        const rhs2 = term();
+        acc = acc === null || rhs2 === null ? null : Math.max(acc, rhs2);
+      } else return acc;
+    }
+  }
+  try {
+    const d = expr();
+    return i === tk.length ? d : null;
+  } catch {
+    return null;
+  }
+}
+var LINEAR_OPS = /* @__PURE__ */ new Set(["oxyz_midpoint", "oxyz_centroid", "oxyz_ratio", "oxyz_reflect"]);
+function relationDegree(prove) {
+  const linDeg = (arg) => {
+    if (!arg || typeof arg !== "object") return null;
+    if ("line" in arg) return 1;
+    if ("plane" in arg) return 2;
+    return null;
+  };
+  switch (prove.relation) {
+    case "perpendicular":
+    case "parallel": {
+      const a = linDeg(prove.a), b = linDeg(prove.b);
+      return a === null || b === null ? null : a + b;
+    }
+    case "collinear":
+      return 2;
+    case "coplanar":
+      return 3;
+    case "point_on_line":
+      return 2;
+    case "point_on_plane":
+      return 3;
+    case "midpoint":
+      return 1;
+    case "equal_length":
+      return 2;
+    case "ratio":
+      return 2;
+    default:
+      return null;
+  }
+}
+function buildInstancePlan(plan, sample) {
+  const pointOps = plan.points.map((p2) => ({
+    op: "oxyz_point",
+    name: p2.name,
+    at: [substitute(String(p2.at[0]), sample), substitute(String(p2.at[1]), sample), substitute(String(p2.at[2]), sample)]
+  }));
+  return {
+    solidName: plan.solidName ?? "prove",
+    ops: [...pointOps, ...plan.ops ?? []],
+    asserts: plan.asserts ?? [],
+    queries: [{ ...plan.prove, kind: "prove" }]
+  };
+}
+var isExactScalar = (s) => s.exact !== null || !!(s.sum && s.sum.terms.length > 0);
+var isExactVec = (v) => isExactScalar(v.x) && isExactScalar(v.y) && isExactScalar(v.z);
+var fracVec = (v) => [displayScalar(v.x), displayScalar(v.y), displayScalar(v.z)];
+function neededObjects(rels) {
+  const out = { pairs: [], triples: [], sets: [] };
+  const pair2 = (x) => {
+    if (Array.isArray(x) && x.length === 2) out.pairs.push([String(x[0]), String(x[1])]);
+  };
+  const plane = (x) => {
+    if (Array.isArray(x) && x.length >= 3) out.triples.push([String(x[0]), String(x[1]), String(x[2])]);
+  };
+  const lin = (x) => {
+    if (x && typeof x === "object") {
+      if ("line" in x) pair2(x.line);
+      if ("plane" in x) plane(x.plane);
+    }
+  };
+  for (const r2 of rels) {
+    switch (r2.relation) {
+      case "perpendicular":
+      case "parallel":
+        lin(r2.a);
+        lin(r2.b);
+        break;
+      case "point_on_line":
+        pair2(r2.line);
+        break;
+      case "point_on_plane":
+        plane(r2.plane);
+        break;
+      case "midpoint":
+        pair2(r2.of);
+        break;
+      case "equal_length":
+      case "ratio":
+        pair2(r2.a);
+        pair2(r2.b);
+        break;
+      case "collinear":
+        if (Array.isArray(r2.points)) out.sets.push(r2.points.map(String));
+        break;
+      case "coplanar":
+        if (Array.isArray(r2.points)) out.sets.push(r2.points.map(String));
+        break;
+    }
+  }
+  return out;
+}
+function degeneracyOf(et, needed, requireSpatial) {
+  for (const [name, p2] of et.points) if (!isExactVec(p2.p)) return { category: "uncertain", reason: `to\u1EA1 \u0111\u1ED9 \u0111i\u1EC3m ${name} kh\xF4ng ch\xEDnh x\xE1c (float)` };
+  const P = (n) => et.points.get(n)?.p ?? null;
+  const same = (a, b) => {
+    const u = P(a), v = P(b);
+    if (!u || !v) return null;
+    const d = decideVecZero(subV(u, v));
+    return d.exact ? d.zero : null;
+  };
+  for (const [a, b] of needed.pairs) {
+    if (!P(a) || !P(b)) return { category: "buildError", reason: `\u0111i\u1EC3m "${!P(a) ? a : b}" kh\xF4ng t\u1ED3n t\u1EA1i trong h\xECnh` };
+    if (same(a, b)) return { category: "degenerate", reason: `\u0111i\u1EC3m tr\xF9ng ${a} \u2261 ${b} (\u0111\u01B0\u1EDDng/\u0111o\u1EA1n ${a}${b} kh\xF4ng x\xE1c \u0111\u1ECBnh)` };
+  }
+  for (const [a, b, c] of needed.triples) {
+    const u = P(a), v = P(b), w = P(c);
+    if (!u || !v || !w) return { category: "buildError", reason: `\u0111i\u1EC3m \u0111\u1ECBnh m\u1EB7t (${a}${b}${c}) kh\xF4ng t\u1ED3n t\u1EA1i trong h\xECnh` };
+    const cl = collinear(u, v, w);
+    if (!cl.certified) return { category: "uncertain", reason: `kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c m\u1EB7t (${a}${b}${c}) c\xF3 x\xE1c \u0111\u1ECBnh kh\xF4ng` };
+    if (cl.holds) return { category: "degenerate", reason: `m\u1EB7t ph\u1EB3ng (${a}${b}${c}) kh\xF4ng x\xE1c \u0111\u1ECBnh: ba \u0111i\u1EC3m th\u1EB3ng h\xE0ng` };
+  }
+  for (const set of needed.sets) {
+    for (const n of set) if (!P(n)) return { category: "buildError", reason: `\u0111i\u1EC3m "${n}" kh\xF4ng t\u1ED3n t\u1EA1i trong h\xECnh` };
+    const distinct = set.filter((n, i) => set.findIndex((m) => same(m, n) === true) === i);
+    if (distinct.length < 2) return { category: "degenerate", reason: `c\xE1c \u0111i\u1EC3m ${set.join(", ")} tr\xF9ng nhau` };
+    if (set.length >= 4) {
+      let ok = false;
+      for (let i = 0; i < distinct.length && !ok; i++) for (let j = i + 1; j < distinct.length && !ok; j++) for (let k = j + 1; k < distinct.length && !ok; k++) {
+        const cl = collinear(P(distinct[i]), P(distinct[j]), P(distinct[k]));
+        if (cl.certified && !cl.holds) ok = true;
+      }
+      if (!ok) return { category: "degenerate", reason: `c\xE1c \u0111i\u1EC3m ${set.join(", ")} th\u1EB3ng h\xE0ng \u2014 m\u1EC7nh \u0111\u1EC1 \u0111\u1ED3ng ph\u1EB3ng t\u1EA7m th\u01B0\u1EDDng` };
+    }
+  }
+  for (const [name, l] of et.lines) {
+    const d = decideVecZero(l.dir);
+    if (d.exact && d.zero) return { category: "degenerate", reason: `\u0111\u01B0\u1EDDng th\u1EB3ng ${name} c\xF3 vector ch\u1EC9 ph\u01B0\u01A1ng 0` };
+  }
+  for (const [name, pl] of et.planes) {
+    const d = decideVecZero(pl.n);
+    if (d.exact && d.zero) return { category: "degenerate", reason: `m\u1EB7t ph\u1EB3ng ${name} c\xF3 ph\xE1p tuy\u1EBFn 0` };
+  }
+  if (requireSpatial && et.points.size >= 4) {
+    const pts = [...et.points.values()].map((p2) => p2.p);
+    const A = pts[0];
+    let B, C, spatial = false, uncertain = false;
+    for (const q2 of pts) {
+      const d = decideVecZero(subV(q2, A));
+      if (!d.exact) uncertain = true;
+      else if (!d.zero) {
+        B = q2;
+        break;
+      }
+    }
+    if (B) for (const q2 of pts) {
+      const cl = collinear(A, B, q2);
+      if (!cl.certified) uncertain = true;
+      else if (!cl.holds) {
+        C = q2;
+        break;
+      }
+    }
+    if (B && C) for (const q2 of pts) {
+      const cp = coplanar4(A, B, C, q2);
+      if (!cp.certified) uncertain = true;
+      else if (!cp.holds) {
+        spatial = true;
+        break;
+      }
+    }
+    if (!spatial) {
+      if (uncertain) return { category: "uncertain", reason: "kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c kh\u1ED1i c\xF3 d\u1EB9t hay kh\xF4ng" };
+      return { category: "degenerate", reason: "kh\u1ED1i d\u1EB9t: m\u1ECDi \u0111i\u1EC3m \u0111\u1ED3ng ph\u1EB3ng (kh\xF4ng t\u1EA1o th\xE0nh kh\u1ED1i)" };
+    }
+  }
+  return null;
+}
+function evaluateInstance(plan, sample, ctx) {
+  const rej = (category, reason) => ({ status: "rejected", rejection: { category, reason } });
+  const parsed = RunPlanSchema.safeParse(buildInstancePlan(plan, sample));
+  if (!parsed.success) return rej("buildError", `plan th\u1EC3 hi\u1EC7n sai schema: ${parsed.error.issues[0]?.message ?? "schema"}`);
+  const inst = parsed.data;
+  let et;
+  try {
+    et = executeUnifiedPlan(inst);
+  } catch (e) {
+    return rej("buildError", `d\u1EF1ng h\xECnh h\u1ECFng: ${e.message}`);
+  }
+  const requireSpatial = ctx.requireSpatial ?? plan.points.length >= 4;
+  const dg = degeneracyOf(et, ctx.needed, requireSpatial);
+  if (dg) return { status: "rejected", rejection: dg };
+  for (const a of inst.asserts) {
+    try {
+      const v = verifyAssertE(a, et);
+      if (v) return rej("hypothesis", `gi\u1EA3 thi\u1EBFt (assert ${a.relation} ${a.args.join(",")}) vi ph\u1EA1m: ${v.message}`);
+    } catch (e) {
+      return rej("uncertain", `assert ${a.relation} kh\xF4ng \u0111\xE1nh gi\xE1 \u0111\u01B0\u1EE3c: ${e.message}`);
+    }
+  }
+  for (const h of ctx.hypotheses) {
+    const r3 = computeQuery(h, et);
+    const label = describeRel(h);
+    if (!r3.ok) return rej("uncertain", `gi\u1EA3 thi\u1EBFt "${label}" kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c ch\xEDnh x\xE1c: ${r3.problem}`);
+    const ans3 = r3.answer;
+    if (!ans3.holds) return rej("hypothesis", `gi\u1EA3 thi\u1EBFt "${label}" KH\xD4NG tho\u1EA3 \u1EDF th\u1EC3 hi\u1EC7n n\xE0y (${ans3.text})`);
+  }
+  const notAssumedHeld = ctx.notAssumed.map((n) => {
+    const r3 = computeQuery(n, et);
+    return r3.ok ? r3.answer.holds : null;
+  });
+  const r2 = computeQuery(ctx.claim, et);
+  if (!r2.ok) return rej("uncertain", `m\u1EC7nh \u0111\u1EC1 kh\xF4ng quy\u1EBFt \u0111\u1ECBnh \u0111\u01B0\u1EE3c ch\xEDnh x\xE1c: ${r2.problem}`);
+  const ans2 = r2.answer;
+  if (ans2.kind !== "prove") return rej("buildError", "truy v\u1EA5n kh\xF4ng ph\u1EA3i prove");
+  const points = {};
+  for (const [name, p2] of et.points) points[name] = fracVec(p2.p);
+  return { status: "valid", holds: ans2.holds, text: ans2.text, points, notAssumedHeld };
+}
+var REL_VI = {
+  perpendicular: "vu\xF4ng g\xF3c",
+  parallel: "song song",
+  collinear: "th\u1EB3ng h\xE0ng",
+  coplanar: "\u0111\u1ED3ng ph\u1EB3ng",
+  point_on_line: "\u0111i\u1EC3m thu\u1ED9c \u0111\u01B0\u1EDDng",
+  point_on_plane: "\u0111i\u1EC3m thu\u1ED9c m\u1EB7t",
+  midpoint: "trung \u0111i\u1EC3m",
+  equal_length: "b\u1EB1ng nhau",
+  ratio: "t\u1EC9 s\u1ED1"
+};
+var describeRel = (r2) => {
+  const rel2 = String(r2.relation);
+  const tok = (x) => Array.isArray(x) ? x.join("") : x && typeof x === "object" ? "line" in x ? tok(x.line) : "plane" in x ? `(${tok(x.plane)})` : String(x.entity ?? "?") : String(x ?? "");
+  const label = REL_VI[rel2] ?? rel2;
+  if ("a" in r2 && "b" in r2) return `${tok(r2.a)} ${label} ${tok(r2.b)}`;
+  if ("points" in r2) return `${tok(r2.points)} ${label}`;
+  if ("point" in r2) return `${tok(r2.point)} ${label} ${tok(r2.line ?? r2.plane ?? r2.of)}`;
+  return label;
+};
+function parseRelation(rel2, role) {
+  const parsed = QueryESchema.safeParse({ ...rel2, kind: "prove" });
+  if (parsed.success) return { ok: true, q: parsed.data };
+  const iss = parsed.error.issues[0];
+  return { ok: false, error: `${role} "${String(rel2.relation ?? "?")}" ngo\xE0i t\u1EADp m\u1EC7nh \u0111\u1EC1 h\u1ED7 tr\u1EE3 ho\u1EB7c sai c\xFA ph\xE1p (${iss ? (iss.path.join(".") || "g\u1ED1c") + ": " + iss.message : "schema"})` };
+}
+function proveGeneral(plan) {
+  const relation = String(plan.prove.relation ?? "unknown");
+  const need2 = Math.max(4, plan.trials ?? 16);
+  const maxAttempts = Math.max(need2, plan.maxAttempts ?? need2 * 8);
+  const seed = (plan.seed ?? 1374501499) >>> 0;
+  const domain = { ...DEFAULT_DOMAIN, ...plan.domain ?? {} };
+  const maxHypRate = plan.maxHypothesisViolationRate ?? 0.25;
+  const config = { trials: need2, seed, maxAttempts, domain, maxHypothesisViolationRate: maxHypRate };
+  const rnd4 = mulberry322(seed);
+  const hypotheses = plan.hypotheses ?? [];
+  const notAssumed = plan.notAssumed ?? [];
+  const rejected = { buildError: 0, degenerate: 0, hypothesis: 0, uncertain: 0, reasons: [] };
+  const warnings = [];
+  const base = { relation, rejected, config, warnings };
+  const noBound = (note2) => ({ estimated: false, note: note2 });
+  const parsedRels = [parseRelation(plan.prove, "m\u1EC7nh \u0111\u1EC1"), ...hypotheses.map((h) => parseRelation(h, "gi\u1EA3 thi\u1EBFt")), ...notAssumed.map((n) => parseRelation(n, "quan h\u1EC7 notAssumed"))];
+  const syntax = parsedRels.find((p2) => !p2.ok);
+  if (syntax && !syntax.ok) {
+    return { ...base, verdict: "abstain", abstainReason: "unsupported_relation", trials: 0, attempts: 0, detail: syntax.error, errorBound: noBound("kh\xF4ng ch\u1EA1y") };
+  }
+  const queries = parsedRels.map((p2) => p2.q);
+  const paramNames = new Set(plan.params.map((p2) => p2.name));
+  const coordSrc = plan.points.flatMap((p2) => p2.at.map(String));
+  const used = /* @__PURE__ */ new Set();
+  for (const s of coordSrc) for (const n of paramNames) if (new RegExp("(?<![A-Za-z0-9])" + n + "(?![A-Za-z0-9])").test(s)) used.add(n);
+  for (const n of paramNames) if (!used.has(n)) warnings.push(`tham s\u1ED1 "${n}" kh\xF4ng xu\u1EA5t hi\u1EC7n trong to\u1EA1 \u0111\u1ED9 n\xE0o`);
+  if (used.size === 0) warnings.push("to\u1EA1 \u0111\u1ED9 kh\xF4ng ph\u1EE5 thu\u1ED9c tham s\u1ED1 n\xE0o \u2014 k\u1EBFt lu\u1EADn ch\u1EC9 bao ph\u1EE7 \u0111\xFAng m\u1ED9t h\xECnh (v\xE0 c\xE1c h\xECnh \u0111\u1ED3ng d\u1EA1ng)");
+  const ctx = {
+    needed: neededObjects([plan.prove, ...hypotheses, ...notAssumed]),
+    requireSpatial: plan.requireSpatial,
+    claim: queries[0],
+    hypotheses: queries.slice(1, 1 + hypotheses.length),
+    notAssumed: queries.slice(1 + hypotheses.length)
+  };
+  const naHeld = notAssumed.map(() => 0), naEval = notAssumed.map(() => 0);
+  let valid = 0;
+  let attempts = 0;
+  let firstSample;
+  const note = (r2) => {
+    rejected[r2.category]++;
+    if (rejected.reasons.length < 6 && !rejected.reasons.includes(r2.reason)) rejected.reasons.push(r2.reason);
+  };
+  const rejectedTotal = () => rejected.buildError + rejected.degenerate + rejected.hypothesis + rejected.uncertain;
+  for (; attempts < maxAttempts && valid < need2; attempts++) {
+    const sample = {};
+    for (const spec of plan.params) sample[spec.name] = sampleParam(spec, rnd4, domain);
+    const out = evaluateInstance(plan, sample, ctx);
+    if (out.status === "rejected") {
+      note(out.rejection);
+      continue;
+    }
+    valid++;
+    if (!firstSample) firstSample = sample;
+    out.notAssumedHeld.forEach((h, i) => {
+      if (h !== null) {
+        naEval[i]++;
+        if (h) naHeld[i]++;
+      }
+    });
+    if (out.holds === false) {
+      const ex = Object.entries(sample).map(([k, v]) => `${k}=${v}`).join(", ");
+      return {
+        ...base,
+        verdict: "false",
+        trials: valid,
+        attempts: attempts + 1,
+        detail: `ph\u1EA3n v\xED d\u1EE5 \u1EDF th\u1EC3 hi\u1EC7n th\u1EE9 ${valid} (${ex}): ${out.text} \u2014 m\u1EC7nh \u0111\u1EC1 "${relation}" KH\xD4NG \u0111\xFAng t\u1ED5ng qu\xE1t`,
+        counterexample: sample,
+        sample,
+        counterexampleDetail: { params: sample, points: out.points, evaluated: out.text },
+        errorBound: noBound('ph\u1EA3n v\xED d\u1EE5 \u0111\u01B0\u1EE3c \u0111\xE1nh gi\xE1 ch\xEDnh x\xE1c \u2014 k\u1EBFt lu\u1EADn "sai" kh\xF4ng c\xF3 x\xE1c su\u1EA5t sai')
+      };
+    }
+  }
+  const rejSummary = `lo\u1EA1i ${rejectedTotal()}/${attempts}: suy bi\u1EBFn ${rejected.degenerate}, vi ph\u1EA1m gi\u1EA3 thi\u1EBFt ${rejected.hypothesis}, kh\xF4ng ch\u1EAFc ch\u1EAFn ${rejected.uncertain}, l\u1ED7i d\u1EF1ng ${rejected.buildError}`;
+  const why = rejected.reasons.length ? ` \u2014 vd: ${rejected.reasons.slice(0, 3).join("; ")}` : "";
+  if (attempts > 0 && rejected.hypothesis / attempts > maxHypRate) {
+    return {
+      ...base,
+      verdict: "abstain",
+      abstainReason: "hypothesis_violated",
+      trials: valid,
+      attempts,
+      sample: firstSample,
+      detail: `tham s\u1ED1 ho\xE1 kh\xF4ng tho\u1EA3 gi\u1EA3 thi\u1EBFt: ${rejected.hypothesis}/${attempts} th\u1EC3 hi\u1EC7n vi ph\u1EA1m (ng\u01B0\u1EE1ng ${Math.round(maxHypRate * 100)}%) \u2014 nghi b\u01B0\u1EDBc d\u1ECBch khai h\xECnh sai; t\u1EEB ch\u1ED1i${why}`,
+      errorBound: noBound("t\u1EEB ch\u1ED1i")
+    };
+  }
+  if (valid < need2) {
+    const counts = [["degenerate", rejected.degenerate], ["hypothesis_violated", rejected.hypothesis], ["predicate_uncertain", rejected.uncertain], ["invalid_plan", rejected.buildError]];
+    counts.sort((a, b) => b[1] - a[1]);
+    const total = rejectedTotal();
+    const reason = total > 0 && counts[0][1] * 2 >= total ? counts[0][0] : "insufficient_instances";
+    return {
+      ...base,
+      verdict: "abstain",
+      abstainReason: reason,
+      trials: valid,
+      attempts,
+      sample: firstSample,
+      detail: `ch\u1EC9 d\u1EF1ng \u0111\u01B0\u1EE3c ${valid}/${need2} th\u1EC3 hi\u1EC7n h\u1EE3p l\u1EC7 (ch\xEDnh x\xE1c, tho\u1EA3 gi\u1EA3 thi\u1EBFt, kh\xF4ng suy bi\u1EBFn); ${rejSummary}${why} \u2014 kh\xF4ng \u0111\u1EE7 c\u01A1 s\u1EDF, t\u1EEB ch\u1ED1i`,
+      errorBound: noBound("t\u1EEB ch\u1ED1i")
+    };
+  }
+  const overConstrained = notAssumed.filter((_, i) => naEval[i] > 0 && naHeld[i] === naEval[i]).map(describeRel);
+  notAssumed.forEach((n, i) => {
+    if (naEval[i] === 0) warnings.push(`kh\xF4ng ki\u1EC3m \u0111\u01B0\u1EE3c quan h\u1EC7 notAssumed "${describeRel(n)}" \u1EDF th\u1EC3 hi\u1EC7n n\xE0o`);
+  });
+  if (overConstrained.length) {
+    return {
+      ...base,
+      verdict: "abstain",
+      abstainReason: "over_constrained",
+      trials: valid,
+      attempts,
+      sample: firstSample,
+      overConstrained,
+      detail: `tham s\u1ED1 ho\xE1 SI\u1EBET D\u01AF gi\u1EA3 thi\u1EBFt: quan h\u1EC7 \u0111\u1EC1 kh\xF4ng gi\u1EA3 thi\u1EBFt "${overConstrained.join('", "')}" l\u1EA1i \u0111\xFAng \u1EDF to\xE0n b\u1ED9 ${valid} th\u1EC3 hi\u1EC7n \u2014 h\u1ECD h\xECnh b\u1ECB thu h\u1EB9p v\xE0o tr\u01B0\u1EDDng h\u1EE3p ri\xEAng; t\u1EEB ch\u1ED1i ch\u1EE9ng nh\u1EADn t\u1ED5ng qu\xE1t`,
+      errorBound: noBound("t\u1EEB ch\u1ED1i")
+    };
+  }
+  let coordDeg = 0;
+  for (const s of coordSrc) {
+    const d = exprDegree(s, paramNames);
+    if (d === null) {
+      coordDeg = null;
+      break;
+    }
+    coordDeg = Math.max(coordDeg, d);
+  }
+  const opsKinds = (plan.ops ?? []).map((o) => String(o.op ?? "?"));
+  const nonLinear = opsKinds.filter((k) => !LINEAR_OPS.has(k));
+  const relDeg = relationDegree(plan.prove);
+  let errorBound;
+  if (coordDeg === null) errorBound = noBound("kh\xF4ng \u01B0\u1EDBc l\u01B0\u1EE3ng: c\xF3 to\u1EA1 \u0111\u1ED9 kh\xF4ng ph\u1EA3i \u0111a th\u1EE9c theo tham s\u1ED1 (chia/c\u0103n theo tham s\u1ED1 ho\u1EB7c kh\xF4ng \u0111\u1ECDc \u0111\u01B0\u1EE3c)");
+  else if (nonLinear.length) errorBound = noBound(`kh\xF4ng \u01B0\u1EDBc l\u01B0\u1EE3ng: op ph\xE1i sinh phi tuy\u1EBFn (${[...new Set(nonLinear)].join(", ")}) \u2014 b\u1EADc t\u1EED th\u1EE9c kh\xF4ng x\xE1c \u0111\u1ECBnh n\u1EBFu kh\xF4ng t\xEDnh k\xFD hi\u1EC7u`);
+  else if (relDeg === null) errorBound = noBound("kh\xF4ng \u01B0\u1EDBc l\u01B0\u1EE3ng: to\xE1n h\u1EA1ng l\xE0 th\u1EF1c th\u1EC3 c\xF3 t\xEAn, kh\xF4ng \u0111\u1ECDc \u0111\u01B0\u1EE3c b\u1EADc t\u1EEB plan");
+  else {
+    const mu = Math.max(...plan.params.map((p2) => paramPointMass(p2, domain)));
+    const degree = relDeg * coordDeg;
+    const acceptance = valid / attempts;
+    const perTrial = Math.min(1, degree * mu / acceptance);
+    const total = Math.pow(perTrial, valid);
+    errorBound = {
+      estimated: true,
+      degree,
+      coordDegree: coordDeg,
+      relationDegree: relDeg,
+      maxPointMass: mu,
+      acceptance,
+      perTrial,
+      total,
+      note: perTrial >= 1 ? "ch\u1EB7n kh\xF4ng c\xF3 \xFD ngh\u0129a (\u22651): b\u1EADc qu\xE1 cao so v\u1EDBi mi\u1EC1n m\u1EABu \u2014 m\u1EDF r\u1ED9ng mi\u1EC1n/m\u1EABu s\u1ED1 ho\u1EB7c gi\u1EA3m b\u1EADc" : `Schwartz\u2013Zippel d\u1EA1ng t\u1ED5ng qu\xE1t: Pr[\u0111a th\u1EE9c \u2260 0 nh\u01B0ng = 0 t\u1EA1i m\u1EABu] \u2264 b\u1EADc\xB7\u03BC (\u03BC = kh\u1ED1i l\u01B0\u1EE3ng \u0111i\u1EC3m l\u1EDBn nh\u1EA5t c\u1EE7a b\u1ED9 l\u1EA5y m\u1EABu), chia cho t\u1EC9 l\u1EC7 ch\u1EA5p nh\u1EADn v\xEC c\xF3 lo\u1EA1i th\u1EC3 hi\u1EC7n; ${valid} th\u1EC3 hi\u1EC7n \u0111\u1ED9c l\u1EADp \u21D2 \u2264 (${perTrial.toExponential(2)})^${valid}. B\u1EADc l\xE0 CH\u1EB6N TR\xCAN \u0111\u1ECDc t\u1EEB c\xFA ph\xE1p bi\u1EC3u th\u1EE9c; gi\u1EA3 \u0111\u1ECBnh PRNG x\u1EA5p x\u1EC9 ng\u1EABu nhi\xEAn.`
+    };
+  }
+  return {
+    ...base,
+    verdict: "true",
+    trials: valid,
+    attempts,
+    sample: firstSample,
+    errorBound,
+    detail: `"${relation}" \u0111\xFAng \u1EDF to\xE0n b\u1ED9 ${valid} th\u1EC3 hi\u1EC7n h\u1EEFu t\u1EF7 ng\u1EABu nhi\xEAn \u0111\u1ED9c l\u1EADp (ki\u1EC3m \u0111\u1ED3ng nh\u1EA5t th\u1EE9c${hypotheses.length ? `, ${hypotheses.length} gi\u1EA3 thi\u1EBFt ki\u1EC3m ch\xEDnh x\xE1c m\u1ED7i th\u1EC3 hi\u1EC7n` : ""}${notAssumed.length ? `, ${notAssumed.length} quan h\u1EC7 kh\xF4ng-gi\u1EA3-thi\u1EBFt \u0111\u01B0\u1EE3c x\xE1c nh\u1EADn c\xF3 bi\u1EBFn thi\xEAn` : ""}${rejectedTotal() ? `; ${rejSummary}` : ""})`
+  };
 }
 
 // api/_lib/kernel/entityToGeometry.ts
@@ -6625,7 +8323,7 @@ function entityTableToGeometryData(et, name) {
 }
 
 // api/_lib/kernel/analysis/expr.ts
-function tokenize(s) {
+function tokenize2(s) {
   const toks = [];
   let i = 0;
   while (i < s.length) {
@@ -6681,7 +8379,7 @@ var FUNCS = {
 var CONSTS = { pi: Math.PI, e: Math.E };
 var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 function parseExpr(src) {
-  const toks = tokenize(src);
+  const toks = tokenize2(src);
   let pos = 0;
   const peek = () => toks[pos];
   const eat = () => toks[pos++];
@@ -7055,7 +8753,7 @@ function squareFreeUpTo(n) {
 }
 var SQUAREFREE = squareFreeUpTo(400);
 var MAX_DEN = 200;
-function gcd2(a, b) {
+function gcd3(a, b) {
   a = Math.abs(a);
   b = Math.abs(b);
   while (b) {
@@ -7067,7 +8765,7 @@ function asRational(x, maxDen) {
   for (let q2 = 1; q2 <= maxDen; q2++) {
     const p2 = Math.round(x * q2);
     if (Math.abs(x - p2 / q2) < EPS4) {
-      const g = gcd2(p2, q2);
+      const g = gcd3(p2, q2);
       return { p: p2 / g, q: q2 / g };
     }
   }
@@ -7084,7 +8782,7 @@ function fmtPiTerm(num3, den) {
   const coeff = num3 === 1 ? "\u03C0" : `${num3}\u03C0`;
   return den === 1 ? coeff : `${coeff}/${den}`;
 }
-function recognizeConstant(x) {
+function recognizeConstant(x, eps = EPS4) {
   const q0 = asRational(x, MAX_DEN);
   if (q0) return { text: fmtRational(q0.p, q0.q), value: q0.p / q0.q };
   for (const b of SQUAREFREE) {
@@ -7092,7 +8790,7 @@ function recognizeConstant(x) {
     const r2 = asRational(s, MAX_DEN);
     if (r2 && r2.p !== 0) {
       const val = r2.p / r2.q * Math.sqrt(b);
-      if (Math.abs(val - x) < EPS4) {
+      if (Math.abs(val - x) < eps) {
         const sign = r2.p < 0 ? "-" : "";
         return { text: sign + fmtSurdTerm(Math.abs(r2.p), r2.q, b), value: val };
       }
@@ -7107,9 +8805,9 @@ function recognizeConstant(x) {
         const p2 = asRational(x - qv * root, 16);
         if (!p2) continue;
         const val = p2.p / p2.q + qv * root;
-        if (Math.abs(val - x) < EPS4) {
+        if (Math.abs(val - x) < eps) {
           const qAbsNum = Math.abs(qn);
-          const g = gcd2(qAbsNum, qd);
+          const g = gcd3(qAbsNum, qd);
           const surd = fmtSurdTerm(qAbsNum / g, qd / g, r2);
           const op = qn < 0 ? "-" : "+";
           return { text: `${fmtRational(p2.p, p2.q)} ${op} ${surd}`, value: val };
@@ -7120,9 +8818,21 @@ function recognizeConstant(x) {
   const rp = asRational(x / Math.PI, 64);
   if (rp && rp.p !== 0) {
     const val = rp.p / rp.q * Math.PI;
-    if (Math.abs(val - x) < EPS4) {
+    if (Math.abs(val - x) < eps) {
       const sign = rp.p < 0 ? "-" : "";
       return { text: sign + fmtPiTerm(Math.abs(rp.p), rp.q), value: val };
+    }
+  }
+  for (const b of SQUAREFREE) {
+    if (b === 1) continue;
+    const t = x / (Math.PI * Math.sqrt(b));
+    const r2 = asRational(t, MAX_DEN);
+    if (r2 && r2.p !== 0) {
+      const val = r2.p / r2.q * Math.sqrt(b) * Math.PI;
+      if (Math.abs(val - x) < eps) {
+        const sign = r2.p < 0 ? "-" : "";
+        return { text: sign + fmtSurdTerm(Math.abs(r2.p), r2.q, b).replace("/", "\u03C0/").concat(fmtSurdTerm(Math.abs(r2.p), r2.q, b).includes("/") ? "" : "\u03C0"), value: val };
+      }
     }
   }
   for (let qd = 1; qd <= 8; qd++) {
@@ -7132,9 +8842,9 @@ function recognizeConstant(x) {
       const p2 = asRational(x - qv * Math.PI, 16);
       if (!p2 || p2.p === 0) continue;
       const val = p2.p / p2.q + qv * Math.PI;
-      if (Math.abs(val - x) < EPS4) {
+      if (Math.abs(val - x) < eps) {
         const qAbsNum = Math.abs(qn);
-        const g = gcd2(qAbsNum, qd);
+        const g = gcd3(qAbsNum, qd);
         const piTerm = fmtPiTerm(qAbsNum / g, qd / g);
         const op = qn < 0 ? "-" : "+";
         return { text: `${fmtRational(p2.p, p2.q)} ${op} ${piTerm}`, value: val };
@@ -7224,6 +8934,10 @@ function lensArea(r1, r2, d) {
   const a2 = r2 * r2 * Math.acos(clamp1((d * d + r2 * r2 - r1 * r1) / (2 * d * r2)));
   const tri = 0.5 * Math.sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2));
   return a1 + a2 - tri;
+}
+function solidVolume(s) {
+  if (s.kind === "cylinder") return Math.PI * s.radius * s.radius * Math.abs(s.to - s.from);
+  return Math.PI * s.baseRadius * s.baseRadius * Math.abs(s.apexZ - s.baseZ) / 3;
 }
 function intersectionVolume(a, b) {
   const [aLo, aHi] = zRange(a);
@@ -7323,14 +9037,20 @@ var SolidDeclSchema = external_exports.union([
 var ScalarSource = external_exports.union([
   QueryESchema,
   external_exports.object({ kind: external_exports.literal("expr"), expr: external_exports.string() }),
-  external_exports.object({ kind: external_exports.literal("solid_volume"), of: external_exports.tuple([external_exports.string(), external_exports.string()]), mode: external_exports.literal("intersection") })
+  // MỘT khối ⇒ thể tích của chính nó; HAI khối + mode:"intersection" ⇒ thể tích phần giao.
+  external_exports.object({ kind: external_exports.literal("solid_volume"), of: external_exports.array(external_exports.string()).min(1).max(2), mode: external_exports.literal("intersection").optional() }),
+  // GỘP các nguồn số (kể cả khối ghép): "thể tích H1 + thể tích H2 = 30".
+  external_exports.object({ kind: external_exports.literal("combine"), op: external_exports.enum(["sum", "diff"]), of: external_exports.array(external_exports.unknown()).min(2).max(12) })
 ]);
 var AnalyzeSchema = external_exports.union([
   external_exports.object({ kind: external_exports.literal("optimize"), parameter: external_exports.string(), sense: external_exports.enum(["max", "min"]), objective: ScalarSource }),
   external_exports.object({
     kind: external_exports.literal("solve"),
     parameter: external_exports.string(),
-    constraint: external_exports.object({ of: ScalarSource, equals: NumOrExpr }),
+    // `equals` nhận CẢ số/biểu thức LẪN một nguồn số khác: đề kiểu "IA = IB" (tâm mặt cầu ngoại
+    // tiếp, điểm cách đều…) là so HAI đại lượng cùng tính được, không phải so với một hằng số.
+    // Trước đây schema chỉ cho hằng nên các bài đó bị loại ngay từ cửa.
+    constraint: external_exports.object({ of: ScalarSource, equals: external_exports.union([NumOrExpr, ScalarSource]) }),
     report: ScalarSource
   }),
   external_exports.object({ kind: external_exports.literal("integrate"), variable: external_exports.string(), from: NumOrExpr, to: NumOrExpr, integrand: external_exports.string() }),
@@ -7339,7 +9059,7 @@ var AnalyzeSchema = external_exports.union([
   external_exports.object({
     kind: external_exports.literal("solve_multi"),
     parameters: external_exports.array(external_exports.string()).min(2),
-    constraints: external_exports.array(external_exports.object({ of: ScalarSource, equals: NumOrExpr })).min(1),
+    constraints: external_exports.array(external_exports.object({ of: ScalarSource, equals: external_exports.union([NumOrExpr, ScalarSource]) })).min(1),
     report: ScalarSource
   })
 ]);
@@ -7379,7 +9099,12 @@ var AnalysisPlanSchema = RunPlanSchema.extend({
   // khác (vd "lít"), LLM khai answerScale (hệ số nhân, vd 0.001 cho cm³→lít) + answerUnit ("lít") để đáp
   // hiện đúng đơn vị. Bỏ trống ⇒ hiện số trần. KHÔNG ảnh hưởng phép tính, chỉ khâu hiển thị cuối.
   answerScale: NumOrExpr.optional(),
-  answerUnit: external_exports.string().optional()
+  answerUnit: external_exports.string().optional(),
+  // LOẠI ĐẠI LƯỢNG của đáp (tuỳ chọn, chỉ cần khi bài ở "thang chữ"): dùng để ghép lại ×a^k —
+  // k = 1 cho độ dài, 2 cho diện tích, 3 cho thể tích. Đây là việc PHÂN LOẠI (LLM đọc đề là biết),
+  // không phải tính toán. Thiếu trường này ở bài thang chữ thì engine KHÔNG đoán: nó đánh dấu đáp
+  // là chưa chứng nhận để hệ từ chối, thay vì trả "9" cho đáp đúng là "9a" (lỗi đã đo trên đề thật).
+  answerKind: external_exports.enum(["distance", "length", "slant", "point_coord", "area", "volume", "sphere_metric", "ratio"]).optional()
 });
 function numify(c, env, params) {
   if (typeof c === "string" && params.some((p2) => new RegExp(`\\b${p2}\\b`).test(c))) return evalExpr(c, env);
@@ -7433,9 +9158,9 @@ function runAnalysis(raw) {
   };
   const answerScale = plan.answerScale != null ? evalExpr(String(plan.answerScale), {}) : 1;
   const answerUnit = plan.answerUnit ? ` ${plan.answerUnit}` : "";
-  const mkAnswer2 = (val) => {
+  const mkAnswer2 = (val, eps) => {
     const display = Number.isFinite(val) ? val * answerScale : val;
-    const nice = Number.isFinite(display) ? recognizeConstant(display) : null;
+    const nice = Number.isFinite(display) ? recognizeConstant(display, eps) : null;
     const num3 = nice ? nice.text : fmtNum2(display);
     return { approx: display, text: num3 + answerUnit, approximate: !nice };
   };
@@ -7488,15 +9213,42 @@ function runAnalysis(raw) {
     const g2 = geo;
     return { ...g2, curves: [...g2.curves ?? [], ...curves] };
   };
+  const PARAM_SCALAR_KEYS = /* @__PURE__ */ new Set(["r", "h", "R", "s1", "s2"]);
+  const numifyQuery = (src, env) => {
+    if (!src || typeof src !== "object" || Array.isArray(src)) return src;
+    const o = src;
+    let changed = false;
+    const out = { ...o };
+    for (const [k, v] of Object.entries(o)) {
+      if (k === "of" && Array.isArray(v)) {
+        out.of = v.map((x) => numifyQuery(x, env));
+        changed = true;
+        continue;
+      }
+      if (!PARAM_SCALAR_KEYS.has(k) || typeof v !== "string") continue;
+      if (!paramNames.some((n) => new RegExp(`(^|[^A-Za-z0-9_])${n}([^A-Za-z0-9_]|$)`).test(v))) continue;
+      try {
+        out[k] = evalExpr(v, env);
+        changed = true;
+      } catch {
+      }
+    }
+    return changed ? out : src;
+  };
   const isExprSrc = (s) => !!s && typeof s === "object" && s.kind === "expr";
   const isSolidVolSrc = (s) => !!s && typeof s === "object" && s.kind === "solid_volume";
+  const isCombineSrc = (s) => !!s && typeof s === "object" && s.kind === "combine" && Array.isArray(s.of);
   const solidVolumeAt = (env, src) => {
     const built = buildSolids(env);
-    const a = built[src.of[0]], b = built[src.of[1]];
+    const a = built[src.of[0]];
     if (!a) throw new Error(`Kh\u1ED1i "${src.of[0]}" ch\u01B0a khai b\xE1o trong solids`);
+    if (src.of.length === 1) return solidVolume(a);
+    const b = built[src.of[1]];
     if (!b) throw new Error(`Kh\u1ED1i "${src.of[1]}" ch\u01B0a khai b\xE1o trong solids`);
     return intersectionVolume(a, b).value;
   };
+  const withPlaceholderOp = (ops) => ops.length > 0 ? ops : [{ op: "oxyz_point", name: "O0", at: [0, 0, 0] }];
+  const assertsAtSolution = (resid) => plan.asserts.map((a) => a.tolerance != null ? a : { ...a, tolerance: Math.max(1e-6, 10 * Math.abs(resid)) });
   const concreteOpsEnv = (env) => {
     const fitted = fitAt(env).coeffs;
     const needFn = (name) => {
@@ -7553,13 +9305,22 @@ function runAnalysis(raw) {
         return null;
       }
     }
+    if (isCombineSrc(src)) {
+      let acc = null;
+      for (const sub7 of src.of) {
+        const v = evalQueryEnv(env, sub7);
+        if (v === null || !Number.isFinite(v)) return null;
+        acc = acc === null ? v : src.op === "sum" ? acc + v : acc - v;
+      }
+      return acc;
+    }
     let ops;
     try {
-      ops = concreteOpsEnv(env);
+      ops = withPlaceholderOp(concreteOpsEnv(env));
     } catch {
       return null;
     }
-    const res = run({ solidName: plan.solidName, ops, asserts: [], queries: [src] });
+    const res = run({ solidName: plan.solidName, ops, asserts: [], queries: [numifyQuery(src, env)] });
     if (!res.ok || res.answers.length === 0) return null;
     try {
       return scalarOf(res.answers[0]);
@@ -7583,6 +9344,8 @@ function runAnalysis(raw) {
         } catch {
           values[index] = null;
         }
+      } else if (isCombineSrc(source)) {
+        values[index] = evalQueryEnv(env, source);
       } else {
         geometric.push({ index, source });
       }
@@ -7590,7 +9353,7 @@ function runAnalysis(raw) {
     if (geometric.length === 0) return values;
     let ops;
     try {
-      ops = concreteOpsEnv(env);
+      ops = withPlaceholderOp(concreteOpsEnv(env));
     } catch {
       return values;
     }
@@ -7598,7 +9361,7 @@ function runAnalysis(raw) {
       solidName: plan.solidName,
       ops,
       asserts: [],
-      queries: geometric.map(({ source }) => source)
+      queries: geometric.map(({ source }) => numifyQuery(source, env))
     });
     if (!result.ok || result.answers.length !== geometric.length) return values;
     geometric.forEach(({ index }, answerIndex) => {
@@ -7616,11 +9379,13 @@ function runAnalysis(raw) {
       const { funcs } = fitAt({});
       const from = evalExpr(String(az.from), {}, funcs);
       const to = evalExpr(String(az.to), {}, funcs);
-      const r2 = integrate((x) => evalExpr(az.integrand, { [az.variable]: x }, funcs), from, to);
+      const r2 = integrate((x) => evalExpr(az.integrand, { [az.variable]: x }, funcs), from, to, 1e-12);
       return {
         ok: true,
         parameter: { name: az.variable, value: NaN },
-        answer: mkAnswer2(r2.value),
+        // Simpson kép cho SAI SỐ ƯỚC LƯỢNG (Richardson): dùng chính nó làm dung sai nhận dạng,
+        // nên '41.3333329…' được nhận đúng là 124/3 mà vẫn có căn cứ, không phải làm tròn bừa.
+        answer: mkAnswer2(r2.value, Math.max(1e-10, 20 * r2.estimatedError)),
         violations: [],
         errors: [],
         geometry: buildAnalysisFigure(az.variable, buildFigureInput({}))
@@ -7697,12 +9462,34 @@ function runAnalysis(raw) {
         });
         return env;
       };
+      const isSrc = (v) => !!v && typeof v === "object";
       const residualsOf = (env) => {
         const queryValues = evalQueriesEnv(env, az.constraints.map((constraint) => constraint.of));
+        const rhsIdx = [];
+        az.constraints.forEach((c, i) => {
+          if (isSrc(c.equals)) rhsIdx.push(i);
+        });
+        const rhsVals = new Array(az.constraints.length).fill(null);
+        if (rhsIdx.length > 0) {
+          const got = evalQueriesEnv(env, rhsIdx.map((i) => az.constraints[i].equals));
+          rhsIdx.forEach((i, k) => {
+            rhsVals[i] = got[k];
+          });
+        }
         return az.constraints.map((constraint, index) => {
           const value = queryValues[index];
           if (value === null || !Number.isFinite(value)) return null;
-          return value - evalExpr(String(constraint.equals), env);
+          let target2;
+          if (isSrc(constraint.equals)) target2 = rhsVals[index];
+          else {
+            try {
+              target2 = evalExpr(String(constraint.equals), env);
+            } catch {
+              target2 = null;
+            }
+          }
+          if (target2 === null || !Number.isFinite(target2)) return null;
+          return value - target2;
         });
       };
       const objective = (xs) => {
@@ -7726,7 +9513,7 @@ function runAnalysis(raw) {
       if (maxResid > RESID_TOL) return fail2(az.parameters.join(","), `kh\xF4ng gi\u1EA3i \u0111\u01B0\u1EE3c (residual ${maxResid.toExponential(2)})`);
       let violations = [], errors = [], geometry = null;
       try {
-        const res = run({ solidName: plan.solidName, ops: concreteOpsEnv(envBest), asserts: plan.asserts, queries: [] });
+        const res = run({ solidName: plan.solidName, ops: withPlaceholderOp(concreteOpsEnv(envBest)), asserts: assertsAtSolution(maxResid), queries: [] });
         violations = res.violations;
         errors = res.errors.map((e) => ({ message: e.message }));
         if (res.entities.points.size > 0) geometry = entityTableToGeometryData(res.entities, plan.solidName || "figure");
@@ -7752,23 +9539,25 @@ function runAnalysis(raw) {
   if (!decl) return fail2(pname, `parameter "${pname}" ch\u01B0a khai b\xE1o`);
   const lo = evalExpr(String(decl.domain[0]), {});
   const hi = evalExpr(String(decl.domain[1]), {});
-  const concreteOps = (value) => concreteOpsEnv({ [pname]: value });
+  const concreteOps = (value) => withPlaceholderOp(concreteOpsEnv({ [pname]: value }));
   const evalQuery = (value, src) => evalQueryEnv({ [pname]: value }, src);
-  const finalize = (value, src) => {
+  const finalize = (value, src, resid = 0) => {
     const env = { [pname]: value };
     let violations = [];
     let errors = [];
     let val = NaN;
     let geometry = null;
-    if (isExprSrc(src) || isSolidVolSrc(src)) {
+    if (isExprSrc(src) || isSolidVolSrc(src) || isCombineSrc(src)) {
       try {
-        val = isSolidVolSrc(src) ? solidVolumeAt(env, src) : evalExpr(src.expr, env, fitAt(env).funcs);
+        const v = isCombineSrc(src) ? evalQueryEnv(env, src) : isSolidVolSrc(src) ? solidVolumeAt(env, src) : evalExpr(src.expr, env, fitAt(env).funcs);
+        if (v === null) throw new Error("ngu\u1ED3n s\u1ED1 kh\xF4ng \u0111\xE1nh gi\xE1 \u0111\u01B0\u1EE3c t\u1EA1i nghi\u1EC7m");
+        val = v;
       } catch (e) {
         return fail2(pname, e.message);
       }
       if (plan.ops.length > 0) {
         try {
-          const res = run({ solidName: plan.solidName, ops: concreteOps(value), asserts: plan.asserts, queries: [] });
+          const res = run({ solidName: plan.solidName, ops: concreteOps(value), asserts: assertsAtSolution(resid), queries: [] });
           violations = res.violations;
           errors = res.errors.map((e) => ({ message: e.message }));
           if (res.entities.points.size > 0) geometry = entityTableToGeometryData(res.entities, plan.solidName || "figure");
@@ -7783,7 +9572,7 @@ function runAnalysis(raw) {
       } catch (e) {
         return fail2(pname, e.message);
       }
-      const res = run({ solidName: plan.solidName, ops, asserts: plan.asserts, queries: [src] });
+      const res = run({ solidName: plan.solidName, ops, asserts: assertsAtSolution(resid), queries: [numifyQuery(src, env)] });
       try {
         if (res.answers.length > 0) val = scalarOf(res.answers[0]);
       } catch {
@@ -7817,12 +9606,17 @@ function runAnalysis(raw) {
     }
     return finalize(best.x, obj);
   }
-  const target = evalExpr(String(plan.analyze.constraint.equals), {});
+  const cequals = plan.analyze.constraint.equals;
+  const rhsIsSrc = !!cequals && typeof cequals === "object";
+  const target = rhsIsSrc ? 0 : evalExpr(String(cequals), {});
   const cof = plan.analyze.constraint.of;
   const g = (x) => {
     const v = evalQuery(x, cof);
     if (v === null) throw new Error("constraint l\u1ED7i t\u1EA1i tham s\u1ED1");
-    return v;
+    if (!rhsIsSrc) return v;
+    const t = evalQuery(x, cequals);
+    if (t === null) throw new Error("v\u1EBF ph\u1EA3i c\u1EE7a r\xE0ng bu\u1ED9c l\u1ED7i t\u1EA1i tham s\u1ED1");
+    return v - t;
   };
   let sol;
   try {
@@ -7831,7 +9625,7 @@ function runAnalysis(raw) {
     return fail2(pname, e.message);
   }
   if (!sol) return fail2(pname, "kh\xF4ng t\xECm \u0111\u01B0\u1EE3c nghi\u1EC7m tham s\u1ED1 trong mi\u1EC1n");
-  return finalize(sol.x, plan.analyze.report);
+  return finalize(sol.x, plan.analyze.report, sol.residual);
 }
 function runAny(raw) {
   if (raw && typeof raw === "object" && "analyze" in raw) return runAnalysis(raw);
@@ -8185,7 +9979,7 @@ function buildVesselSolid(id, segs, opts = {}) {
 }
 
 // api/_lib/kernel/analysis/sectionCut.ts
-var sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+var sub4 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 var add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 var scale2 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 var dot2 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -8296,11 +10090,11 @@ function resolveSectionPoint(poly, spec) {
   const v1 = poly.vertices[n1];
   const v2 = poly.vertices[n2];
   if (!v1 || !v2) throw new Error(`C\u1EA1nh kh\xF4ng h\u1EE3p l\u1EC7: ${n1}${n2}`);
-  return add3(v1, scale2(sub3(v2, v1), spec.t));
+  return add3(v1, scale2(sub4(v2, v1), spec.t));
 }
 function planeFrom3(p2) {
   if (p2.length < 3) return null;
-  const n = cross2(sub3(p2[1], p2[0]), sub3(p2[2], p2[0]));
+  const n = cross2(sub4(p2[1], p2[0]), sub4(p2[2], p2[0]));
   const len = norm(n);
   if (len < 1e-9) return null;
   return { point: p2[0], normal: scale2(n, 1 / len) };
@@ -8310,18 +10104,18 @@ var roundKey = (v) => v.map((x) => (Math.abs(x) < 1e-9 ? 0 : x).toFixed(6)).join
 function orderRing(pts, normal) {
   if (pts.length < 3) return pts;
   const c = scale2(pts.reduce((s, p2) => add3(s, p2), [0, 0, 0]), 1 / pts.length);
-  const u0 = sub3(pts[0], c);
+  const u0 = sub4(pts[0], c);
   const uLen = norm(u0);
   const u = uLen < EPS5 ? [1, 0, 0] : scale2(u0, 1 / uLen);
   const v = cross2(normal, u);
   return [...pts].sort((p2, q2) => {
-    const ap = Math.atan2(dot2(sub3(p2, c), v), dot2(sub3(p2, c), u));
-    const aq = Math.atan2(dot2(sub3(q2, c), v), dot2(sub3(q2, c), u));
+    const ap = Math.atan2(dot2(sub4(p2, c), v), dot2(sub4(p2, c), u));
+    const aq = Math.atan2(dot2(sub4(q2, c), v), dot2(sub4(q2, c), u));
     return ap - aq;
   });
 }
 function sliceConvexPolyhedron(poly, point, normal) {
-  const d = (v) => dot2(sub3(v, point), normal);
+  const d = (v) => dot2(sub4(v, point), normal);
   const seen = /* @__PURE__ */ new Set();
   const pts = [];
   const push = (v) => {
@@ -8340,7 +10134,7 @@ function sliceConvexPolyhedron(poly, point, normal) {
     if (Math.abs(d2) < EPS5) push(v2);
     if (d1 * d2 < -EPS5 * EPS5) {
       const t = d1 / (d1 - d2);
-      push(add3(v1, scale2(sub3(v2, v1), t)));
+      push(add3(v1, scale2(sub4(v2, v1), t)));
     }
   }
   if (pts.length < 3) return [];
@@ -8354,7 +10148,7 @@ function polygonArea3D(pts) {
 }
 function fanArea(pts) {
   let s = 0;
-  for (let i = 1; i < pts.length - 1; i++) s += norm(cross2(sub3(pts[i], pts[0]), sub3(pts[i + 1], pts[0]))) / 2;
+  for (let i = 1; i < pts.length - 1; i++) s += norm(cross2(sub4(pts[i], pts[0]), sub4(pts[i + 1], pts[0]))) / 2;
   return s;
 }
 function buildSectionCut(id, kind, dims, specs, color = "#f59e0b") {
@@ -8546,12 +10340,12 @@ var ZERO = () => ({ k0: rat(0n), k1: rat(0n), k2: rat(0n) });
 var HALF = rat(1n, 2n);
 var SI = { length: "m", time: "s" };
 function motionOf(op, base = SI) {
-  const S = scalarFromNumber;
+  const S3 = scalarFromNumber;
   if (op.op === "mover1d") {
     const q2 = {
       k0: qtyLength(op.x0, op.xUnit, base),
       k1: qtyVelocity(op.v0, op.v0Unit, base),
-      k2: mul(HALF, S(op.a))
+      k2: mul(HALF, S3(op.a))
     };
     const t0 = qtyTime(op.startAt, op.tUnit, base);
     return op.axis === "y" ? { name: op.name, t0, x: ZERO(), y: q2, op } : { name: op.name, t0, x: q2, y: ZERO(), op };
@@ -8561,7 +10355,7 @@ function motionOf(op, base = SI) {
       name: op.name,
       t0: rat(0n),
       x: { k0: qtyLength(op.x0, op.xUnit, base), k1: rat(0n), k2: rat(0n) },
-      y: { k0: qtyLength(op.h0, op.xUnit, base), k1: rat(0n), k2: neg(mul(HALF, S(op.g))) },
+      y: { k0: qtyLength(op.h0, op.xUnit, base), k1: rat(0n), k2: neg(mul(HALF, S3(op.g))) },
       op
     };
   }
@@ -8571,7 +10365,7 @@ function motionOf(op, base = SI) {
     name: op.name,
     t0: rat(0n),
     x: { k0: qtyLength(op.x0, op.xUnit, base), k1: mul(v0, cos), k2: rat(0n) },
-    y: { k0: qtyLength(op.h0, op.xUnit, base), k1: mul(v0, sin), k2: neg(mul(HALF, S(op.g))) },
+    y: { k0: qtyLength(op.h0, op.xUnit, base), k1: mul(v0, sin), k2: neg(mul(HALF, S3(op.g))) },
     op
   };
 }
@@ -9246,7 +11040,7 @@ var CircuitPlanSchema = external_exports.object({
 var EPS_SELF2 = 1e-6;
 var ONE = rat(1n);
 var ZERO2 = rat(0n);
-function leafR(node, sub6) {
+function leafR(node, sub7) {
   if (node.kind === "resistor") {
     const base = scalarFromNumber(node.ohms);
     return node.unit === "kohm" ? mul(base, rat(1000n)) : base;
@@ -9255,30 +11049,30 @@ function leafR(node, sub6) {
     const U = scalarFromNumber(node.ratedVolts);
     return div(mul(U, U), scalarFromNumber(node.ratedWatts));
   }
-  if (sub6 && sub6.name === node.name) return sub6.R;
+  if (sub7 && sub7.name === node.name) return sub7.R;
   throw new Error(`unknown_resistor "${node.name}" ch\u01B0a c\xF3 gi\xE1 tr\u1ECB \u2014 ch\u1EC9 h\u1EE3p l\u1EC7 tr\xEAn \u0111\u01B0\u1EDDng M\xF6bius (\xA77.5)`);
 }
-function leafRN(node, sub6) {
+function leafRN(node, sub7) {
   if (node.kind === "resistor") return node.ohms * (node.unit === "kohm" ? 1e3 : 1);
   if (node.kind === "lamp") return node.ratedVolts * node.ratedVolts / node.ratedWatts;
-  if (sub6 && sub6.name === node.name) return sub6.Rn;
+  if (sub7 && sub7.name === node.name) return sub7.Rn;
   throw new Error(`unknown_resistor "${node.name}" ch\u01B0a c\xF3 gi\xE1 tr\u1ECB`);
 }
-function reduceR(node, sub6) {
-  if (node.kind === "series") return node.items.map((i) => reduceR(i, sub6)).reduce((a, b) => add2(a, b), ZERO2);
+function reduceR(node, sub7) {
+  if (node.kind === "series") return node.items.map((i) => reduceR(i, sub7)).reduce((a, b) => add2(a, b), ZERO2);
   if (node.kind === "parallel") {
-    const invSum = node.items.map((i) => div(ONE, reduceR(i, sub6))).reduce((a, b) => add2(a, b), ZERO2);
-    return div(ONE, invSum);
+    const invSum2 = node.items.map((i) => div(ONE, reduceR(i, sub7))).reduce((a, b) => add2(a, b), ZERO2);
+    return div(ONE, invSum2);
   }
-  return leafR(node, sub6);
+  return leafR(node, sub7);
 }
-function reduceRN(node, sub6) {
-  if (node.kind === "series") return node.items.reduce((s, i) => s + reduceRN(i, sub6), 0);
-  if (node.kind === "parallel") return 1 / node.items.reduce((s, i) => s + 1 / reduceRN(i, sub6), 0);
-  return leafRN(node, sub6);
+function reduceRN(node, sub7) {
+  if (node.kind === "series") return node.items.reduce((s, i) => s + reduceRN(i, sub7), 0);
+  if (node.kind === "parallel") return 1 / node.items.reduce((s, i) => s + 1 / reduceRN(i, sub7), 0);
+  return leafRN(node, sub7);
 }
-function distribute(node, drive, sub6, vals, byName, lampInfo) {
-  const R = reduceR(node, sub6), Rn = reduceRN(node, sub6);
+function distribute(node, drive, sub7, vals, byName, lampInfo) {
+  const R = reduceR(node, sub7), Rn = reduceRN(node, sub7);
   let I, U, In, Un;
   if (drive.mode === "I") {
     I = drive.valS;
@@ -9295,10 +11089,10 @@ function distribute(node, drive, sub6, vals, byName, lampInfo) {
   vals.set(node, { kind, R, I, U, P: mul(U, I), Rn, In, Un, Pn: Un * In });
   if (node.kind === "series") {
     if (node.name) byName.set(node.name, node);
-    for (const it of node.items) distribute(it, { mode: "I", valS: I, valN: In }, sub6, vals, byName, lampInfo);
+    for (const it of node.items) distribute(it, { mode: "I", valS: I, valN: In }, sub7, vals, byName, lampInfo);
   } else if (node.kind === "parallel") {
     if (node.name) byName.set(node.name, node);
-    for (const it of node.items) distribute(it, { mode: "U", valS: U, valN: Un }, sub6, vals, byName, lampInfo);
+    for (const it of node.items) distribute(it, { mode: "U", valS: U, valN: Un }, sub7, vals, byName, lampInfo);
   } else {
     byName.set(node.name, node);
     if (node.kind === "lamp") {
@@ -9307,16 +11101,16 @@ function distribute(node, drive, sub6, vals, byName, lampInfo) {
     }
   }
 }
-function solveCircuit(source, root, sub6) {
+function solveCircuit(source, root, sub7) {
   const emfN = source.emf, rN = source.r ?? 0;
   const emf = scalarFromNumber(emfN), r2 = scalarFromNumber(rN);
-  const rTotal = reduceR(root, sub6), rTotalN = reduceRN(root, sub6);
+  const rTotal = reduceR(root, sub7), rTotalN = reduceRN(root, sub7);
   const iMain = div(emf, add2(rTotal, r2)), iMainN = emfN / (rTotalN + rN);
   const uExternal = mul(iMain, rTotal), uExternalN = iMainN * rTotalN;
   const vals = /* @__PURE__ */ new Map();
   const byName = /* @__PURE__ */ new Map();
   const lampInfo = /* @__PURE__ */ new Map();
-  distribute(root, { mode: "I", valS: iMain, valN: iMainN }, sub6, vals, byName, lampInfo);
+  distribute(root, { mode: "I", valS: iMain, valN: iMainN }, sub7, vals, byName, lampInfo);
   return { emf, r: r2, emfN, rN, rTotal, rTotalN, iMain, iMainN, uExternal, uExternalN, root, vals, byName, lampInfo };
 }
 function rowOf(solved, of) {
@@ -9342,8 +11136,8 @@ function mobius(node) {
     const C2 = without.map((i) => reduceR(i)).reduce((a, b) => add2(a, b), ZERO2);
     return { a: add2(M.a, mul(M.c, C2)), b: add2(M.b, mul(M.d, C2)), c: M.c, d: M.d };
   }
-  const invSum = without.map((i) => div(ONE, reduceR(i))).reduce((a, b) => add2(a, b), ZERO2);
-  const C = div(ONE, invSum);
+  const invSum2 = without.map((i) => div(ONE, reduceR(i))).reduce((a, b) => add2(a, b), ZERO2);
+  const C = div(ONE, invSum2);
   return { a: mul(C, M.a), b: mul(C, M.b), c: add2(M.a, mul(C, M.c)), d: add2(M.b, mul(C, M.d)) };
 }
 function solveUnknown(source, root, _unknownName, targetCurrent) {
@@ -9380,13 +11174,13 @@ function fmtNum5(x) {
   const digits = Math.abs(x) >= 1e3 ? 2 : 4;
   return parseFloat(x.toFixed(digits)).toString();
 }
-function mkAns(kind, s, floatRef, unit, label, verdict) {
+function mkAns(kind, s, floatRef, unit, label, verdict2) {
   const tol = 1e-6 * Math.max(1, Math.abs(floatRef));
   if (s.exact !== null && Math.abs(exactToApprox(s.exact) - floatRef) <= tol) {
-    return { label, kind, text: displayScalar(s), approx: exactToApprox(s.exact), unit, approximate: false, verdict };
+    return { label, kind, text: displayScalar(s), approx: exactToApprox(s.exact), unit, approximate: false, verdict: verdict2 };
   }
   const nice = Number.isFinite(floatRef) ? recognizeConstant(floatRef) : null;
-  return { label, kind, text: nice ? nice.text : fmtNum5(floatRef), approx: floatRef, unit, approximate: !nice, verdict };
+  return { label, kind, text: nice ? nice.text : fmtNum5(floatRef), approx: floatRef, unit, approximate: !nice, verdict: verdict2 };
 }
 function computeCircuitQuery(solved, query) {
   try {
@@ -9449,8 +11243,8 @@ function computeCircuitQuery(solved, query) {
         if (!li) return { ok: false, problem: `lamp_check: "${query.of}" kh\xF4ng ph\u1EA3i \u0111\xE8n` };
         const ratio = div(row.I, li.iRated), ratioN = row.In / li.iRatedN;
         const cmp = cmpScalar(ratio, rat(1n));
-        const verdict = cmp === 0 ? "sang_binh_thuong" : cmp < 0 ? "sang_yeu" : "sang_manh";
-        return { ok: true, answer: mkAns("lamp_check", ratio, ratioN, "", query.label, verdict) };
+        const verdict2 = cmp === 0 ? "sang_binh_thuong" : cmp < 0 ? "sang_yeu" : "sang_manh";
+        return { ok: true, answer: mkAns("lamp_check", ratio, ratioN, "", query.label, verdict2) };
       }
       case "solve_resistance": {
         const row = rowOf(solved, query.of);
@@ -9940,9 +11734,9 @@ function solveSingle(body, forcesOn, gS, gN, needsMotion, checks, violations) {
     const F = convForce(f);
     const { cos, sin } = trigOf(f.angleDeg);
     const cosN = Math.cos(f.angleDeg * Math.PI / 180), sinN = Math.sin(f.angleDeg * Math.PI / 180);
-    const sgn = f.direction === "backward" ? -1 : 1;
+    const sgn2 = f.direction === "backward" ? -1 : 1;
     appAxial = add2(appAxial, mul(F.s, f.direction === "backward" ? neg(cos) : cos));
-    appAxialN += sgn * F.n * cosN;
+    appAxialN += sgn2 * F.n * cosN;
     vertUp = add2(vertUp, mul(F.s, sin));
     vertUpN += F.n * sinN;
   }
@@ -12440,7 +14234,7 @@ var qtyMassN = (v, u) => v * need(MASS_N, u, "kh\u1ED1i l\u01B0\u1EE3ng");
 var qtyLengthN = (v, u) => v * need(LEN_N, u, "\u0111\u1ED9 d\xE0i");
 var K = rat(9000000000n);
 var absS2 = (s) => (s.exact ? s.exact.num < 0n : s.approx < 0) ? neg(s) : s;
-var signS = (s) => s.exact ? s.exact.num < 0n ? -1 : s.exact.num > 0n ? 1 : 0 : s.approx < 0 ? -1 : s.approx > 0 ? 1 : 0;
+var signS2 = (s) => s.exact ? s.exact.num < 0n ? -1 : s.exact.num > 0n ? 1 : 0 : s.approx < 0 ? -1 : s.approx > 0 ? 1 : 0;
 var r2S = (p2, s) => {
   const dx = sub2(p2.x, s.x), dy = sub2(p2.y, s.y);
   return add2(mul(dx, dx), mul(dy, dy));
@@ -12485,7 +14279,7 @@ function fieldAt(kEff, kEffN, P, PN, srcs) {
     const r2n = (PN.x - s.xN) ** 2 + (PN.y - s.yN) ** 2;
     const mag = div(mul(kEff, absS2(s.q)), r2);
     const magN = kEffN * Math.abs(s.qN) / r2n;
-    const dir = signS(s.q) >= 0 ? `h\u01B0\u1EDBng ra xa \u0111i\u1EC7n t\xEDch ${s.name}` : `h\u01B0\u1EDBng v\u1EC1 ph\xEDa \u0111i\u1EC7n t\xEDch ${s.name}`;
+    const dir = signS2(s.q) >= 0 ? `h\u01B0\u1EDBng ra xa \u0111i\u1EC7n t\xEDch ${s.name}` : `h\u01B0\u1EDBng v\u1EC1 ph\xEDa \u0111i\u1EC7n t\xEDch ${s.name}`;
     return { mag, magN, direction: dir, cls };
   }
   if (cls === "collinear") {
@@ -12501,7 +14295,7 @@ function fieldAt(kEff, kEffN, P, PN, srcs) {
       const r2 = add2(mul(dx, dx), mul(dy, dy));
       const r2n = dxN * dxN + dyN * dyN;
       const dotw = add2(mul(dx, wx), mul(dy, wy));
-      const sg2 = signS(dotw);
+      const sg2 = signS2(dotw);
       net = add2(net, mul(div(mul(kEff, s.q), r2), rat(BigInt(sg2))));
       netN += kEffN * s.qN * sg2 / r2n;
       const dotn = add2(mul(dx, nx), mul(dy, ny));
@@ -12806,7 +14600,7 @@ function computeEFieldQuery(ent, query) {
         const r2n = (a.xN - b.xN) ** 2 + (a.yN - b.yN) ** 2;
         const F = div(mul(mul(ent.kEff, absS2(a.q)), absS2(b.q)), r2);
         const FN = ent.kEffN * Math.abs(a.qN) * Math.abs(b.qN) / r2n;
-        const attract = signS(a.q) * signS(b.q) < 0;
+        const attract = signS2(a.q) * signS2(b.q) < 0;
         const dir = attract ? "hai \u0111i\u1EC7n t\xEDch h\xFAt nhau" : "hai \u0111i\u1EC7n t\xEDch \u0111\u1EA9y nhau";
         return { ok: true, answer: mkEAns("coulomb_force", F, FN, "N", query.label, dir), checks: [] };
       }
@@ -12818,16 +14612,16 @@ function computeEFieldQuery(ent, query) {
         const { fo, checks } = fieldOutFrom(ent, query.at, query.by);
         const q2 = qtyCharge(query.q.value, query.q.unit), qN = qtyChargeN(query.q.value, query.q.unit);
         const F = mul(absS2(q2), fo.mag), FN = Math.abs(qN) * fo.magN;
-        const dir = signS(q2) >= 0 ? `c\xF9ng chi\u1EC1u E (${fo.direction})` : `ng\u01B0\u1EE3c chi\u1EC1u E`;
+        const dir = signS2(q2) >= 0 ? `c\xF9ng chi\u1EC1u E (${fo.direction})` : `ng\u01B0\u1EE3c chi\u1EC1u E`;
         return { ok: true, answer: mkEAns("force_on_test", F, FN, "N", query.label, dir), checks };
       }
       case "field_symmetric": {
         const a = getPoint(ent, query.sources[0]), b = getPoint(ent, query.sources[1]);
-        if (signS(a.q) === 0) return { ok: false, problem: "\u0111i\u1EC7n t\xEDch ngu\u1ED3n b\u1EB1ng 0" };
+        if (signS2(a.q) === 0) return { ok: false, problem: "\u0111i\u1EC7n t\xEDch ngu\u1ED3n b\u1EB1ng 0" };
         const absQ = absS2(a.q), absQN = Math.abs(a.qN);
         const r2 = qtyLength2(query.r.value, query.r.unit), rN = qtyLengthN(query.r.value, query.r.unit);
         const r22 = mul(r2, r2), r2n = rN * rN;
-        const fo = fieldSymmetric(ent.kEff, ent.kEffN, absQ, absQN, r22, r2n, query.angleBetweenDeg, signS(a.q));
+        const fo = fieldSymmetric(ent.kEff, ent.kEffN, absQ, absQN, r22, r2n, query.angleBetweenDeg, signS2(a.q));
         const checks = [{ kind: "symmetry", detail: "\u0111\u1ED1i x\u1EE9ng qua g\xF3c khai t\u01B0\u1EDDng minh (field_symmetric)", residual: 0, pass: true }];
         return { ok: true, answer: mkEAns("field_symmetric", fo.mag, fo.magN, "V/m", query.label, fo.direction), checks };
       }
@@ -12848,7 +14642,7 @@ function computeEFieldQuery(ent, query) {
       case "electric_force": {
         const body = getBody(ent, query.body), { E: E2, EN } = getFieldE(ent, query.field);
         const F = mul(absS2(body.q), E2), FN = Math.abs(body.qN) * EN;
-        const dir = signS(body.q) >= 0 ? "c\xF9ng chi\u1EC1u \u0111\u01B0\u1EDDng s\u1EE9c" : "ng\u01B0\u1EE3c chi\u1EC1u \u0111\u01B0\u1EDDng s\u1EE9c";
+        const dir = signS2(body.q) >= 0 ? "c\xF9ng chi\u1EC1u \u0111\u01B0\u1EDDng s\u1EE9c" : "ng\u01B0\u1EE3c chi\u1EC1u \u0111\u01B0\u1EDDng s\u1EE9c";
         return { ok: true, answer: mkEAns("electric_force", F, FN, "N", query.label, dir), checks: [] };
       }
       case "work": {
@@ -12874,12 +14668,12 @@ function computeEFieldQuery(ent, query) {
       case "equilibrium_field": {
         const body = getBody(ent, query.body);
         if (body.mass === null) return { ok: false, problem: `v\u1EADt "${body.name}" thi\u1EBFu kh\u1ED1i l\u01B0\u1EE3ng cho c\xE2n b\u1EB1ng` };
-        if (signS(body.q) === 0) return { ok: false, problem: `\u0111i\u1EC7n t\xEDch "${body.name}" = 0, kh\xF4ng gi\u1EA3i \u0111\u01B0\u1EE3c E c\xE2n b\u1EB1ng` };
+        if (signS2(body.q) === 0) return { ok: false, problem: `\u0111i\u1EC7n t\xEDch "${body.name}" = 0, kh\xF4ng gi\u1EA3i \u0111\u01B0\u1EE3c E c\xE2n b\u1EB1ng` };
         const g = scalarFromNumber(query.g), gN = query.g;
         const E2 = div(mul(body.mass, g), absS2(body.q));
         const EN = body.massN * gN / Math.abs(body.qN);
         const backResid = Math.abs(Math.abs(body.qN) * EN - body.massN * gN);
-        const dir = signS(body.q) >= 0 ? "th\u1EB3ng \u0111\u1EE9ng, h\u01B0\u1EDBng l\xEAn (c\xE2n tr\u1ECDng l\u1EF1c)" : "th\u1EB3ng \u0111\u1EE9ng, h\u01B0\u1EDBng xu\u1ED1ng (c\xE2n tr\u1ECDng l\u1EF1c)";
+        const dir = signS2(body.q) >= 0 ? "th\u1EB3ng \u0111\u1EE9ng, h\u01B0\u1EDBng l\xEAn (c\xE2n tr\u1ECDng l\u1EF1c)" : "th\u1EB3ng \u0111\u1EE9ng, h\u01B0\u1EDBng xu\u1ED1ng (c\xE2n tr\u1ECDng l\u1EF1c)";
         const checks = [{ kind: "equilibrium_backsub", detail: "|q|\xB7E \u2212 m\xB7g = 0", residual: backResid, pass: backResid <= scale3(body.massN * gN) }];
         return { ok: true, answer: mkEAns("equilibrium_field", E2, EN, "V/m", query.label, dir), checks };
       }
@@ -13273,9 +15067,9 @@ function fmtNum11(x) {
   const digits = Math.abs(x) >= 1e3 ? 2 : 4;
   return parseFloat(x.toFixed(digits)).toString();
 }
-function mkAns3(kind, p2, floatRef, unit, label, verdict) {
+function mkAns3(kind, p2, floatRef, unit, label, verdict2) {
   const cert = certifyPiScalar(p2, floatRef);
-  return { label, kind, text: normalizeMinus(cert.text), approx: cert.approx, unit, approximate: cert.approximate, verdict };
+  return { label, kind, text: normalizeMinus(cert.text), approx: cert.approx, unit, approximate: cert.approximate, verdict: verdict2 };
 }
 function writeExpr(symbol, unit, amp, ampN, omega, phase) {
   const ampTxt = normalizeMinus(displayPiScalar(amp));
@@ -13343,8 +15137,8 @@ function computeAcQuery(m, d, query) {
       case "is_resonance": {
         const ratio = divP(m.ZL, m.ZC);
         const ratioN = m.n.ZL / m.n.ZC;
-        const verdict = isResonant(d) ? "cong_huong" : d.signDZ > 0 ? "tinh_cam_khang" : "tinh_dung_khang";
-        return { ok: true, answer: mkAns3("is_resonance", ratio, ratioN, "", query.label, verdict) };
+        const verdict2 = isResonant(d) ? "cong_huong" : d.signDZ > 0 ? "tinh_cam_khang" : "tinh_dung_khang";
+        return { ok: true, answer: mkAns3("is_resonance", ratio, ratioN, "", query.label, verdict2) };
       }
       case "solve_resonance": {
         const unit = query.target === "C" ? "F" : query.target === "L" ? "H" : "Hz";
@@ -14019,15 +15813,15 @@ function solveMassFromHeat(bodies, ofName, property, Tf) {
   const checks = [], violations = [];
   const kBody = bodies.find((b) => b.name === ofName);
   const others = bodies.filter((b) => b.name !== ofName);
-  const S = others.reduce((acc, b) => addQ(acc, mulQ(mulQ(b.mass, b.c), subQ(Tf, b.T0))), q(rat(0n), 0));
+  const S3 = others.reduce((acc, b) => addQ(acc, mulQ(mulQ(b.mass, b.c), subQ(Tf, b.T0))), q(rat(0n), 0));
   let value;
   if (property === "T0") {
-    value = addQ(Tf, divQ(S, mulQ(kBody.mass, kBody.c)));
+    value = addQ(Tf, divQ(S3, mulQ(kBody.mass, kBody.c)));
   } else {
     const dT = subQ(Tf, kBody.T0);
     if (isZero(dT)) throw new Error("mass_from_heat: Tf tr\xF9ng T0 c\u1EE7a v\u1EADt \u1EA9n \u21D2 kh\xF4ng x\xE1c \u0111\u1ECBnh (chia 0)");
-    if (property === "mass") value = negQ(divQ(S, mulQ(kBody.c, dT)));
-    else value = negQ(divQ(S, mulQ(kBody.mass, dT)));
+    if (property === "mass") value = negQ(divQ(S3, mulQ(kBody.c, dT)));
+    else value = negQ(divQ(S3, mulQ(kBody.mass, dT)));
   }
   if (property === "mass" && !isPos(value)) violations.push({ id: "khoi-luong-am", message: `mass_from_heat: m = ${value.n} \u2264 0 (Tf m\xE2u thu\u1EABn d\u1EEF ki\u1EC7n)` });
   if (property === "c" && !isPos(value)) violations.push({ id: "khoi-luong-am", message: `mass_from_heat: c = ${value.n} \u2264 0 (Tf m\xE2u thu\u1EABn d\u1EEF ki\u1EC7n)` });
@@ -16137,9 +17931,9 @@ function balance(reactants, products) {
   let lcm = 1n;
   for (const v of x) lcm = lcm / bgcd3(lcm, v.den) * v.den;
   let ints = x.map((v) => v.num * lcm / v.den);
-  let gcd3 = 0n;
-  for (const v of ints) gcd3 = bgcd3(gcd3, v);
-  ints = ints.map((v) => v / gcd3);
+  let gcd4 = 0n;
+  for (const v of ints) gcd4 = bgcd3(gcd4, v);
+  ints = ints.map((v) => v / gcd4);
   if (ints.every((v) => v < 0n)) ints = ints.map((v) => -v);
   if (ints.some((v) => v <= 0n)) {
     return { ok: false, problem: "h\u1EC7 s\u1ED1 kh\xF4ng to\xE0n d\u01B0\u01A1ng \u2014 c\xF3 ch\u1EA5t \u0111\u1EB7t nh\u1EA7m v\u1EBF ho\u1EB7c kh\xF4ng tham gia" };
@@ -17115,8 +18909,8 @@ function checkSpectatorsInert(record, species, heated) {
       if (matches.length > 0) {
         return `\u0111a ph\u1EA3n \u1EE9ng: ngo\xE0i ph\u1EA3n \u1EE9ng ch\xEDnh (${record.id}), "${sp.formula}" c\xF2n ph\u1EA3n \u1EE9ng v\u1EDBi "${other.formula}" (${matches.map((m) => m.id).join(", ")}) \u2014 ngo\xE0i ph\u1EA1m vi v0, engine kh\xF4ng t\u1EF1 ch\u1ECDn ph\u1EA3n \u1EE9ng`;
       }
-      const verdict = classifyNoMatch(pair2, { heated });
-      if (verdict?.verdict === "no_reaction") continue;
+      const verdict2 = classifyNoMatch(pair2, { heated });
+      if (verdict2?.verdict === "no_reaction") continue;
       return `ngo\xE0i ph\u1EA1m vi v0: "${sp.formula}" c\xF3 th\u1EC3 ph\u1EA3n \u1EE9ng v\u1EDBi "${other.formula}" (ch\u01B0a m\xF4 h\xECnh h\xF3a trong DB v0) \u2014 kh\xF4ng th\u1EC3 coi "${sp.formula}" l\xE0 ch\u1EA5t tr\u01A1 \u0111\u1EC3 b\u1ECF qua`;
     }
   }
@@ -17344,6 +19138,7 @@ export {
   PlanSchema,
   PointOpSchema,
   PrismOpSchema,
+  ProveGeneralPlanSchema,
   PyramidOpSchema,
   QuerySchema,
   REPAIR_MAX_PERP_ERROR,
@@ -17355,6 +19150,7 @@ export {
   attemptDeterministicRepair,
   buildAnalysisFigure,
   buildAreaRegion,
+  buildInstancePlan,
   buildPolyhedron,
   buildRevolutionSolidOx,
   buildRevolutionSolidOy,
@@ -17375,6 +19171,7 @@ export {
   planarArea,
   planeFrom3,
   polygonArea3D,
+  proveGeneral,
   resolveEntity,
   resolveSectionPoint,
   revolutionVolumeDisk,

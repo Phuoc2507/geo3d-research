@@ -59,7 +59,7 @@ Hai con số này tách nhau nên nhìn là biết nên sửa prompt hay vá eng
 
 ## Rổ hiện tại phủ gì
 
-40 ca. Mỗi đáp đều **đối chiếu tay** trước khi đóng băng (xem `source` của từng file).
+230 ca = 40 ca gốc của app + 190 ca gộp từ nhánh nghiên cứu (`case-*` theo các đợt wave-1…wave-8, `cap-*` khối tròn xoay; 2026-09). Mỗi đáp đều **đối chiếu tay** trước khi đóng băng (xem `source` của từng file). Bảng dưới liệt kê 40 ca gốc; các ca `case-*` phủ khoảng cách/góc/thể tích/thiết diện/mặt cầu/thang chữ/tỉ số thể tích.
 
 | Nhóm | Ca | Loại truy vấn |
 |---|---|---|
@@ -82,7 +82,10 @@ Hai con số này tách nhau nên nhìn là biết nên sửa prompt hay vá eng
 Bước "ngó đáp bằng tay" khi gặt golden đã lộ vài chỗ — **KHÔNG đóng băng làm golden**, để dành vá:
 
 - ✅ **[ĐÃ VÁ — Tầng 2, 2026-08-03] Thể tích khối hộp / lập phương SAI:** trước đây "lập phương cạnh 3" → `9, 9, 9` (xẻ khối thành 3 chóp) và "hộp 2×3×4" → `8`. Đã thêm primitive `solid:"prism"` vào dialect oxyz + nhắc translator dùng. Giờ lập phương → `27`, hộp 2×3×4 → `24`, hộp 3×3×5 → `45`, lăng trụ tam giác vuông → `42`. 4 golden canh giữ.
-- **Tứ diện đều cạnh 3 bỏ cuộc:** cạnh 2 và cạnh 4 giải được nhưng cạnh 3 trả `ok:false` (lỗ hổng, abstain an toàn — không phải đáp sai).
+- ✅ **[HẾT LỖ HỔNG] Tứ diện đều cạnh 3:** ghi chú cũ nói cạnh 3 trả `ok:false`; kiểm lại nay engine giải đúng — cạnh 3 → `9√2/4`, cạnh 5 → `125√2/12`. (Đã xác minh 2026-08-21.)
+- ✅ **[ĐÃ MỞ RỘNG — 2026-08-21] Nón cụt & chóp cụt:** `volume solid:"cone_frustum"` (R,r,h → (1/3)πh(R²+Rr+r²)), `area shape:"cone_frustum"` (Sxq π(R+r)l, Stp +πR²+πr²), `slant` với R (l=√(h²+(R−r)²)); và `volume solid:"pyramid_frustum"` (S1,S2,h → (1/3)h(S1+S2+√(S1S2)), KHÔNG π). Vd nón cụt R5r2h4 → V `52π`, Sxq `35π`, l `5`; chóp cụt S9S4h3 → `19`. 2 golden `cap-non-cut-R5-r2-h4`, `cap-chop-cut-S9-S4-h3`.
+- ✅ **[ĐÃ MỞ RỘNG — 2026-08-21] Nón & trụ:** thêm truy vấn `volume solid:"cone"|"cylinder"`, `area shape:"cone"|"cylinder" part:"lateral"|"total"`, và `slant` (đường sinh) — nhận r,h trực tiếp, trả dạng π/căn (nón r3h4 → V `12π`, Sxq `15π`, l `5`; trụ r2h5 → V `20π`, Stp `28π`). 2 golden `cap-non-r3-h4`, `cap-tru-r2-h5`.
+- ✅ **[ĐÃ MỞ RỘNG — 2026-08-21] Mặt cầu trả DẠNG π chính xác:** trước đây diện tích/thể tích/bán kính mặt cầu trả số thập phân (`113.0973`). Nay: diện tích `4π·r²` → vd `36π`, `8π`; thể tích `(4/3)π·R³` → vd `36π`, `8√2π/3`; bán kính/đường kính → căn chính xác (`√2`, `2√2`). Thêm `what:"diameter"` cho `sphere_metric`; bộ so đáp `answerCompare` nay hiểu `π`. 2 golden `cap-sphere-R3-dientich-thetich`, `cap-sphere-R2can-metrics` canh giữ.
 - **[2026-08-21] Dạng exact của đáp mặt cầu KHÔNG nhất quán:** cùng một mặt cầu R=2 thì
   `area` trả `4π·4` (giữ dạng π nhưng **chưa rút gọn**, đúng ra là `16π`) còn `volume` trả
   thẳng `33.5103` (**mất dạng exact**, đúng ra là `32π/3`). Cả hai đều đúng về SỐ nên

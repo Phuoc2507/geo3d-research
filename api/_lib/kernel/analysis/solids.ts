@@ -37,6 +37,13 @@ export function lensArea(r1: number, r2: number, d: number): number {
 }
 
 // Thể tích phần chung hai khối = ∫ diện-tích-thấu-kính(z) dz trên đoạn độ cao chung.
+// Thể tích của MỘT khối (công thức đóng). Cần cho bài "khối ghép": hai trụ/nón chồng lên nhau —
+// trước đây chỉ có thể tích GIAO của hai khối nên đề dạng đó không diễn đạt được.
+export function solidVolume(s: Solid): number {
+  if (s.kind === 'cylinder') return Math.PI * s.radius * s.radius * Math.abs(s.to - s.from);
+  return (Math.PI * s.baseRadius * s.baseRadius * Math.abs(s.apexZ - s.baseZ)) / 3;
+}
+
 export function intersectionVolume(a: Solid, b: Solid): { value: number; estimatedError: number } {
   const [aLo, aHi] = zRange(a);
   const [bLo, bHi] = zRange(b);

@@ -36,6 +36,8 @@ export { resolveEntity } from './resolve';
 export { toGeometryData } from './toGeometryData';
 export { Trace } from './trace';
 export { run, RunPlanSchema, type EngineResult } from './run';
+// Chứng minh quan hệ tổng quát bằng kiểm đa thể hiện (Schwartz–Zippel) — dùng bởi bridge chứng minh.
+export { proveGeneral, buildInstancePlan, ProveGeneralPlanSchema, type ProveGeneralPlan, type ProveGeneralResult } from './proveGeneral';
 export { entityTableToGeometryData } from './entityToGeometry';
 export { runAnalysis, runAny, AnalysisPlanSchema } from './analysis/runAnalysis';
 // Khối tròn xoay (Advance – rev-ox): builder cần chúng qua kernel-dist (không import .ts nguồn).

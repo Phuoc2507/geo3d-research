@@ -56,7 +56,25 @@ function msgOf(x, fallback) {
   return (typeof x.message === 'string' && x.message) || fallback;
 }
 
+// Nhãn cho kết quả CHỨNG MINH QUAN HỆ (proveGeneral). Đúng/Sai đều là KẾT LUẬN đã chứng nhận CHÍNH
+// XÁC (kiểm đa thể hiện) ⇒ Mức 1. 'abstain' ⇒ Mức 3 với lý do TRUNG THỰC (chưa chứng minh được /
+// ngoài tập quyết định), KHÔNG dùng câu "chưa chứng thực đáp số" gây hiểu nhầm là hệ tính sai.
+function classifyProof(proof) {
+  const label = proof.claim || proof.relation || 'quan hệ';
+  const problemType = `Chứng minh: ${label}`;
+  if (proof.verdict === 'true') {
+    return { level: 1, exactness: 'exact', problemType, reason: null, proof };
+  }
+  if (proof.verdict === 'false') {
+    // Đã BÁC BỎ bằng phản ví dụ — vẫn là kết luận chắc chắn (Mức 1), nhưng nêu rõ là "sai".
+    return { level: 1, exactness: 'exact', problemType, reason: { kind: 'disproved', message: 'Đã bác bỏ: tìm được phản ví dụ (mệnh đề không đúng tổng quát).' }, proof };
+  }
+  return { level: 3, exactness: null, problemType, reason: { kind: 'unproved', message: 'Chưa chứng minh được tổng quát cho dạng này — ngoài tập mệnh đề hệ chứng nhận chính xác.' }, proof };
+}
+
 export function classifyTier(result) {
+  // Kết quả chứng minh đi đường riêng (không có answers[].approx số học như bài đo).
+  if (result && result.proof) return classifyProof(result.proof);
   const plan = result && result.plan;
   const problemType = problemTypeOf(plan);
 

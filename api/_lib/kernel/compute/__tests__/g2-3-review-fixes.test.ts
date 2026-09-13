@@ -33,13 +33,17 @@ describe('§L4 self-certificate compares the EXACT value, not the float shadow',
 });
 
 describe('§L1/L5 angle niceness comes from the EXACT metric, not a float snap', () => {
-  it('an angle within 1e-4° of 45° but NOT exactly 45° is reported approximate, not "45°"', () => {
+  it('an angle within 1e-4° of 45° but NOT exactly 45° is NOT snapped to "45°"', () => {
     // dirs (0,-25,12) & (7,23,7): true angle ≈ 45.0000594°, cos² = 241081/482163 ≠ 1/2.
+    // Bảo đảm cốt lõi: độ "đẹp" đến từ metric EXACT chứ không snap theo float ⇒ exactDegrees null.
+    // |cos| vẫn là số exact (√(rational)) ⇒ xuất chính giá trị đó, KHÔNG hiện "45°", và không phải xấp xỉ.
     const r = computeAngle(line(0n, -25n, 12n), line(7n, 23n, 7n));
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.answer.exactDegrees).toBeNull();
-      expect(r.answer.approximate).toBe(true);
+      expect(r.answer.exactDegrees).toBeNull();      // KHÔNG snap về 45°
+      expect(r.answer.text).not.toBe('45°');
+      expect(r.answer.exactCos).not.toBeNull();      // |cos| exact vẫn được chứng nhận
+      expect(r.answer.approximate).toBe(false);      // đáp là giá trị exact, không phải số độ làm tròn
     }
   });
 

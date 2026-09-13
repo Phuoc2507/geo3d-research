@@ -38,10 +38,19 @@ describe('computeAngle', () => {
     if (r.ok) expect(r.answer.exactDegrees).toBe(90);
   });
 
-  it('góc không đẹp ⇒ approximate với độ thập phân', () => {
+  it('góc không đẹp ⇒ xuất |cos| EXACT (không phải số độ làm tròn)', () => {
+    // dir (1,1,1) & (1,0,0): |cos| = 1/√3 = √3/3 (exact). Đề Việt Nam hỏi "côsin của góc" ⇒ phải
+    // trả chính giá trị exact này, KHÔNG phải "≈ 54.74°". exactDegrees vẫn null (góc không đẹp),
+    // và vì đáp là exact nên approximate = false.
     const r = computeAngle(line(1n, 1n, 1n), line(1n, 0n, 0n));
     expect(r.ok).toBe(true);
-    if (r.ok) { expect(r.answer.approximate).toBe(true); expect(r.answer.text).toMatch(/≈/); }
+    if (r.ok) {
+      expect(r.answer.exactDegrees).toBeNull();      // KHÔNG snap về góc đẹp
+      expect(r.answer.exactCos).not.toBeNull();      // |cos| được chứng nhận exact
+      expect(r.answer.approximate).toBe(false);      // đáp exact ⇒ không phải xấp xỉ
+      expect(r.answer.text).not.toMatch(/°/);        // xuất giá trị lượng giác, không phải số độ
+      expect(r.answer.text).toBe('√3/3');
+    }
   });
 
   it('đường suy biến ⇒ {ok:false}', () => {

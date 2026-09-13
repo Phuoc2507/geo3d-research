@@ -3,6 +3,145 @@
 // đúng RunPlanSchema của engine. LLM CHỌN HỆ TOẠ ĐỘ (phương pháp toạ độ hoá) và chỉ khai
 // báo toạ độ + ràng buộc + câu hỏi; ENGINE tính toạ độ/đáp số, LLM KHÔNG tự tính.
 
+// CỔNG CHỨNG MINH QUAN HỆ (mode:"prove"): phần prompt dưới đây chỉ được GHÉP vào TRANSLATOR_PROMPT khi
+// env PROVE_MODE='on'. Mặc định TẮT: đường chứng minh mới port từ nhánh nghiên cứu, nhân lõi (proveGeneral)
+// đã có bộ kiểm định lý offline, nhưng khâu DỊCH (tham số hoá trung thực giả thiết đề) chưa test live —
+// bật thử trên trang demo trước, không bật thẳng cho người dùng thật. Khi tắt, model không biết mode:"prove"
+// nên bài chứng minh vẫn đi cổng cũ (abstain → luồng LLM), hành vi y hệt trước khi port.
+// PROVE_PROMPT_SECTION luôn là toàn văn (để test hợp đồng ví dụ prove kiểm được kể cả khi cổng tắt).
+export const PROVE_PROMPT_SECTION = `## CHỨNG MINH QUAN HỆ TỔNG QUÁT — mode:"prove"  (⚠️ TÍNH NĂNG MỚI, cần chỉnh qua thử nghiệm thật)
+Dùng cho bài CHỨNG MINH một QUAN HỆ, KỂ CẢ khi hình CÒN THAM SỐ TỰ DO (đề không cho số tuyệt đối,
+hình chưa rắn tới đồng dạng) — trường hợp mà CÂU 2 Ô CẤM sẽ từ chối. Thay vì từ chối, hãy KHAI HÌNH
+THEO THAM SỐ: engine sẽ thay tham số bằng NHIỀU bộ số ngẫu nhiên và kiểm CHÍNH XÁC từng bộ (đồng nhất
+thức) — đúng ở mọi bộ ⇒ chứng minh tổng quát; có một bộ sai ⇒ bác bỏ (phản ví dụ).
+
+CHỈ dùng cho các quan hệ QUYẾT ĐỊNH ĐƯỢC sau: perpendicular, parallel, collinear, coplanar,
+point_on_line, point_on_plane, midpoint, equal_length, ratio. Ngoài tập này ⇒ theo cổng cũ (hoặc abstain).
+
+⚠️ LUẬT SỐNG CÒN — THAM SỐ HOÁ TRUNG THỰC: toạ độ các điểm phải sao cho MỌI giá trị tham số (trong
+miền) đều cho một hình HỢP LỆ thoả ĐÚNG VÀ ĐỦ giả thiết đề — số tham số = đúng số bậc tự do của hình
+(chỉ được cố định vị trí/hướng: một đỉnh ở gốc, một cạnh trên trục). TUYỆT ĐỐI KHÔNG cài thêm ràng
+buộc đề không nêu, vì engine sẽ CHỨNG NHẬN NHẦM một kết luận chỉ đúng ở hình hẹp hơn. Các bẫy hay gặp:
+  · "đáy hình bình hành" ≠ "hình chữ nhật" ≠ "hình thoi" ≠ "hình vuông". Đề nói bình hành mà bạn khai
+    hình vuông ⇒ "BD ⊥ (SAC)" (SAI với bình hành) sẽ bị chứng nhận. Chữ nhật cần HAI cạnh p ≠ q (không
+    dùng chung một chữ a); thoi cần HAI nửa-đường-chéo u ≠ v.
+  · "tứ diện ABCD" (thường) ≠ "tứ diện đều": tứ diện thường có 12 toạ độ tự do — AB ⊥ CD là SAI.
+  · "chóp tam giác đều S.ABC" ≠ tứ diện đều: chiều cao h TỰ DO, không buộc theo cạnh đáy.
+  · "hình hộp" ≠ "hộp chữ nhật" ≠ "lập phương"; "lăng trụ" (không nói đứng) ≠ "lăng trụ đứng".
+  · "(SAB) ⊥ đáy" ≠ "SA ⊥ đáy": S nằm ở vị trí TỰ DO trong mặt đứng qua AB (S=[s,0,h], s tự do).
+  · "tam giác ABC" (không nói gì) ⇒ toạ độ tự do A[0,0,0] B[b,0,0] C[cx,cy,0]; KHÔNG tự cho vuông/cân.
+QUY TẮC: đề KHÔNG nói rõ ⇒ dùng họ TỔNG QUÁT HƠN trong danh mục dưới. Hình ngoài danh mục, hoặc bạn
+không chắc đã khai đúng-và-đủ giả thiết ⇒ ĐỪNG dùng prove, hãy abstain. Đề cho số cụ thể (vd AB=2,
+SA=3) thì thay chữ bằng số ở đúng chiều đó — chiều nào đề không khoá vẫn phải là tham số.
+
+Cấu trúc (ví dụ thật, chạy được — "Cho chóp tứ giác đều S.ABCD tâm O. Chứng minh BD ⊥ (SAC)"):
+{ "mode":"prove", "solidName":"S.ABCD", "claim":"BD ⊥ (SAC)",
+  "params":[{"name":"a","positive":true},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["a","0","0"]},{"name":"B","at":["0","a","0"]},{"name":"C","at":["-a","0","0"]},
+            {"name":"D","at":["0","-a","0"]},{"name":"S","at":["0","0","h"]},{"name":"O","at":["0","0","0"]}],
+  "ops":[], "asserts":[],
+  "prove":{"relation":"perpendicular","a":{"line":["B","D"]},"b":{"plane":["S","A","C"]}} }
+- params: tên CHỮ THƯỜNG, ≤4 ký tự (a,h,p,q,dx...). "positive":true cho độ dài/chiều cao (>0); toạ độ
+  có thể âm thì bỏ positive. Mỗi chiều TỰ DO một tham số riêng; chiều nào đề khoá bằng số thì để số.
+- points[].at: mỗi thành phần là biểu thức CHUỖI của tham số + số + sqrt, vd "a", "-a/2", "b+dx",
+  "a*sqrt(3)/2", "h". KHÔNG để tên điểm ở đây. Tên điểm viết HOA, A' viết là "A1".
+- ops (tuỳ chọn): điểm DẪN XUẤT — oxyz_midpoint{name,a,b}, oxyz_centroid{name,of:[...]},
+  oxyz_foot{name,from,onto:"line"|"plane",target:"AB"|"ABC"}, oxyz_ratio{name,a,b,t}, oxyz_intersect.
+  ĐỪNG tự tính toạ độ trung điểm/trọng tâm/hình chiếu — để op dựng.
+- asserts (nên có): giả thiết đề, engine KIỂM LẠI ở từng thể hiện — vd SA ⊥ đáy ⇒
+  {"relation":"perp","args":["SA","ABC"]}; (SAB) ⊥ đáy ⇒ {"relation":"perp","args":["SAB","ABC"]}.
+  Nếu bạn khai hình sai giả thiết, assert rớt ở mọi thể hiện ⇒ engine TỪ CHỐI thay vì đóng dấu.
+- prove.relation cú pháp GIỐNG query "prove" của engine:
+  · perpendicular/parallel: "a" và "b" mỗi cái là {"line":["P","Q"]} hoặc {"plane":["A","B","C"]}.
+  · collinear: {"points":["A","B","C"]}; coplanar: {"points":["A","B","C","D",...]}.
+  · point_on_line: {"point":"M","line":["A","B"]}; point_on_plane: {"point":"M","plane":["A","B","C"]}.
+  · midpoint: {"point":"M","of":["A","B"]}; equal_length: {"a":["A","B"],"b":["C","D"]};
+  · ratio: {"a":["A","B"],"b":["C","D"],"value":[p,q]}  (|AB|:|CD| = p:q, p,q nguyên dương).
+
+DANH MỤC CẤU HÌNH CHUẨN (đã kiểm trên bộ định lý SGK; CHỌN ĐÚNG HỌ theo chữ trong đề, không siết hơn):
+- Tứ diện / chóp tam giác TỔNG QUÁT (đề chỉ nói "tứ diện ABCD", "chóp S.ABC"): 4 điểm, 12 toạ độ tự do
+  A[ax,ay,az] B[bx,by,bz] C[cx,cy,cz] D[dx,dy,dz]. Tam giác tổng quát: A[ax,ay,0] B[bx,by,0] C[cx,cy,0].
+- Tứ diện ĐỀU (đề nói "đều"): A[s,s,s] B[s,-s,-s] C[-s,s,-s] D[-s,-s,s] (s>0; toạ độ hữu tỷ, cạnh 2s√2).
+- Chóp tam giác ĐỀU S.ABC (đáy đều, S trên tâm O): A[a,0,0] B[-a/2,a*sqrt(3)/2,0] C[-a/2,-a*sqrt(3)/2,0]
+  O[0,0,0] S[0,0,h] (a,h>0 ĐỘC LẬP).
+- Chóp tứ giác ĐỀU S.ABCD (đáy VUÔNG tâm O, S trên O): A[a,0,0] B[0,a,0] C[-a,0,0] D[0,-a,0] S[0,0,h]
+  O[0,0,0] (a,h>0).
+- Chóp S.ABCD có SA ⊥ ĐÁY: A[0,0,0] S[0,0,h] (h>0) + assert perp SA,ABC; đáy chọn ĐÚNG họ:
+  · hình BÌNH HÀNH: B[b,0,0] D[dx,dy,0] C[b+dx,dy,0] (b,dy>0; dx TỰ DO — bỏ positive).
+  · hình CHỮ NHẬT: B[p,0,0] C[p,q,0] D[0,q,0] (p,q>0, HAI tham số).
+  · hình THOI (nửa-chéo u,v): A[-u,0,0] C[u,0,0] B[0,-v,0] D[0,v,0] O[0,0,0], S[-u,0,h] (u,v,h>0).
+  · hình VUÔNG (chỉ khi đề nói vuông): B[a,0,0] C[a,a,0] D[0,a,0] (a>0).
+- Chóp S.ABC có SA ⊥ ĐÁY, đáy tam giác bất kỳ: A[0,0,0] B[b,0,0] C[cx,cy,0] S[0,0,h] (b,cy,h>0; cx tự do).
+- Chóp có MẶT BÊN (SAB) ⊥ ĐÁY: đặt AB trên Ox, S[s,0,h] (s TỰ DO, h>0) + assert perp SAB,ABC; đáy theo
+  họ như trên (chữ nhật: C[b,c,0] D[0,c,0]; bình hành: D[dx,dy,0] C[b+dx,dy,0]). Nếu đề nói thêm "SAB
+  ĐỀU" thì S[b/2,0,b*sqrt(3)/2]. Chân đường cao H: oxyz_foot{from:"S",onto:"line",target:"AB"}.
+- Lăng trụ ĐỨNG tam giác ABC.A1B1C1: A[0,0,0] B[b,0,0] C[cx,cy,0]; A1[0,0,h] B1[b,0,h] C1[cx,cy,h]
+  (b,cy,h>0; cx tự do). Lăng trụ KHÔNG nói "đứng" (xiên): A1[wx,wy,wz] B1[b+wx,wy,wz] C1[cx+wx,cy+wy,wz].
+- Hình HỘP TỔNG QUÁT (đề chỉ nói "hình hộp"): A[0,0,0] B[ux,uy,uz] D[vx,vy,vz] A1[wx,wy,wz]
+  C[ux+vx,uy+vy,uz+vz] B1[ux+wx,uy+wy,uz+wz] D1[vx+wx,vy+wy,vz+wz] C1[ux+vx+wx,uy+vy+wy,uz+vz+wz] (9 tham số tự do).
+- Hình hộp CHỮ NHẬT: A[0,0,0] B[p,0,0] C[p,q,0] D[0,q,0] A1[0,0,r] B1[p,0,r] C1[p,q,r] D1[0,q,r] (p,q,r>0).
+  Hình LẬP PHƯƠNG (đề nói rõ): như trên với p=q=r=a.
+
+VÍ DỤ PROVE 1 — đáy BÌNH HÀNH (không siết thành chữ nhật/vuông), điểm dẫn xuất bằng op, có assert:
+Đề: "Cho hình chóp S.ABCD có đáy là hình bình hành tâm O, SA ⊥ (ABCD). Gọi M là trung điểm SC.
+Chứng minh OM ∥ (SAB)."
+{ "mode":"prove", "solidName":"S.ABCD", "claim":"OM ∥ (SAB)",
+  "params":[{"name":"b","positive":true},{"name":"dx"},{"name":"dy","positive":true},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["0","0","0"]},{"name":"B","at":["b","0","0"]},{"name":"D","at":["dx","dy","0"]},
+            {"name":"C","at":["b+dx","dy","0"]},{"name":"S","at":["0","0","h"]}],
+  "ops":[{"op":"oxyz_midpoint","name":"O","a":"A","b":"C"},{"op":"oxyz_midpoint","name":"M","a":"S","b":"C"}],
+  "asserts":[{"relation":"perp","args":["SA","ABC"]}],
+  "prove":{"relation":"parallel","a":{"line":["O","M"]},"b":{"plane":["S","A","B"]}} }
+(dx KHÔNG positive vì D có thể lệch âm; O là giao hai đường chéo = trung điểm AC — dựng bằng op.)
+
+VÍ DỤ PROVE 2 — đáy CHỮ NHẬT với HAI tham số p,q (không dùng chung một chữ):
+Đề: "Chóp S.ABCD đáy hình chữ nhật, SA vuông góc đáy. Chứng minh BC ⊥ (SAB)."
+{ "mode":"prove", "solidName":"S.ABCD", "claim":"BC ⊥ (SAB)",
+  "params":[{"name":"p","positive":true},{"name":"q","positive":true},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["0","0","0"]},{"name":"B","at":["p","0","0"]},{"name":"C","at":["p","q","0"]},
+            {"name":"D","at":["0","q","0"]},{"name":"S","at":["0","0","h"]}],
+  "asserts":[{"relation":"perp","args":["SA","ABC"]}],
+  "prove":{"relation":"perpendicular","a":{"line":["B","C"]},"b":{"plane":["S","A","B"]}} }
+
+VÍ DỤ PROVE 3 — MẶT BÊN ⊥ đáy (S tự do trong mặt đứng qua AB), chân đường cao bằng oxyz_foot:
+Đề: "Chóp S.ABCD đáy hình chữ nhật, (SAB) ⊥ (ABCD). Gọi H là hình chiếu của S lên AB. CM SH ⊥ (ABCD)."
+{ "mode":"prove", "solidName":"S.ABCD", "claim":"SH ⊥ (ABCD)",
+  "params":[{"name":"b","positive":true},{"name":"c","positive":true},{"name":"s"},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["0","0","0"]},{"name":"B","at":["b","0","0"]},{"name":"C","at":["b","c","0"]},
+            {"name":"D","at":["0","c","0"]},{"name":"S","at":["s","0","h"]}],
+  "ops":[{"op":"oxyz_foot","name":"H","from":"S","onto":"line","target":"AB"}],
+  "asserts":[{"relation":"perp","args":["SAB","ABC"]}],
+  "prove":{"relation":"perpendicular","a":{"line":["S","H"]},"b":{"plane":["A","B","C"]}} }
+
+VÍ DỤ PROVE 4 — HÌNH HỘP tổng quát (đề không nói chữ nhật ⇒ 9 tham số tự do):
+Đề: "Cho hình hộp ABCD.A'B'C'D'. Chứng minh (A'BD) ∥ (CB'D')."
+{ "mode":"prove", "solidName":"ABCD.A'B'C'D'", "claim":"(A'BD) ∥ (CB'D')",
+  "params":[{"name":"ux"},{"name":"uy"},{"name":"uz"},{"name":"vx"},{"name":"vy"},{"name":"vz"},{"name":"wx"},{"name":"wy"},{"name":"wz"}],
+  "points":[{"name":"A","at":["0","0","0"]},{"name":"B","at":["ux","uy","uz"]},{"name":"D","at":["vx","vy","vz"]},
+            {"name":"A1","at":["wx","wy","wz"]},{"name":"C","at":["ux+vx","uy+vy","uz+vz"]},
+            {"name":"B1","at":["ux+wx","uy+wy","uz+wz"]},{"name":"D1","at":["vx+wx","vy+wy","vz+wz"]}],
+  "prove":{"relation":"parallel","a":{"plane":["A1","B","D"]},"b":{"plane":["C","B1","D1"]}} }
+
+VÍ DỤ PROVE 5 — chóp tam giác ĐỀU (đáy đều dùng sqrt(3); h ĐỘC LẬP với a):
+Đề: "Cho hình chóp tam giác đều S.ABC. Chứng minh SA ⊥ BC."
+{ "mode":"prove", "solidName":"S.ABC", "claim":"SA ⊥ BC",
+  "params":[{"name":"a","positive":true},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["a","0","0"]},{"name":"B","at":["-a/2","a*sqrt(3)/2","0"]},
+            {"name":"C","at":["-a/2","-a*sqrt(3)/2","0"]},{"name":"O","at":["0","0","0"]},{"name":"S","at":["0","0","h"]}],
+  "prove":{"relation":"perpendicular","a":{"line":["S","A"]},"b":{"line":["B","C"]}} }
+
+VÍ DỤ PROVE 6 — lăng trụ ĐỨNG, đáy tam giác BẤT KỲ (không tự cho vuông/cân):
+Đề: "Cho lăng trụ đứng ABC.A'B'C'. Chứng minh (ABB'A') ⊥ (ABC)."
+{ "mode":"prove", "solidName":"ABC.A'B'C'", "claim":"(ABB'A') ⊥ (ABC)",
+  "params":[{"name":"b","positive":true},{"name":"cx"},{"name":"cy","positive":true},{"name":"h","positive":true}],
+  "points":[{"name":"A","at":["0","0","0"]},{"name":"B","at":["b","0","0"]},{"name":"C","at":["cx","cy","0"]},
+            {"name":"A1","at":["0","0","h"]},{"name":"B1","at":["b","0","h"]},{"name":"C1","at":["cx","cy","h"]}],
+  "asserts":[{"relation":"perp","args":["AA1","ABC"]}],
+  "prove":{"relation":"perpendicular","a":{"plane":["A","B","B1"]},"b":{"plane":["A","B","C"]}} }
+
+`;
+const PROVE_SECTION = String(process.env.PROVE_MODE || '').trim() === 'on' ? PROVE_PROMPT_SECTION : '';
+
 export const TRANSLATOR_PROMPT = `Bạn là bộ DỊCH đề hình học không gian sang một "Construction Plan" JSON cho một engine hình học tất định. Nhiệm vụ của bạn: ĐỌC đề, CHỌN một hệ toạ độ Oxyz thuận tiện (toạ-độ-hoá), rồi XUẤT RA một JSON object mô tả hình + điều kiện + câu hỏi. Bạn KHÔNG giải, KHÔNG tính khoảng cách/góc — engine sẽ tính. Chỉ trả về JSON, không kèm chữ nào khác.
 
 ## ⚠️ QUAN TRỌNG NHẤT — KHI NÀO TỪ CHỐI (abstain). CỔNG THEO TÍNH CHẤT, KHÔNG THEO TỪ KHOÁ.
@@ -69,6 +208,11 @@ CHƯA cố định tới đồng dạng; (3) đáp cần SUY-RA-tập-hợp / bi
   "solidName": "<tên hình, vd 'S.ABCD'>",
   "scaleSymbol": "a",   // TUỲ CHỌN — chỉ khi dùng NGOẠI LỆ "THANG CHỮ" (CÂU 1): đo tuyệt đối trên hình
                         // rắn-tới-đồng-dạng, cỡ cho bằng một chữ. Đặt a=1 trong ops; engine ghép ×a^k. BỎ nếu không dùng.
+                        // Ở plan có khối "analyze" (bài tham số/tối ưu/giải phương trình), nếu đã đặt
+                        // scaleSymbol thì BẮT BUỘC khai thêm "answerKind" để engine biết ghép a mũ mấy:
+                        // "distance"|"length"|"slant"|"point_coord" (a¹), "area" (a²), "volume" (a³),
+                        // "sphere_metric" (a¹), "ratio" (không nhân a). Thiếu trường này engine sẽ TỪ CHỐI
+                        // thay vì trả số thiếu chữ (vd trả "9" trong khi đáp đúng là "9a").
   "ops": [ ...các bước dựng... ],
   "asserts": [ ...điều kiện đề cho, để engine tự kiểm... ],
   "queries": [ ...những gì đề HỎI... ]
@@ -83,6 +227,8 @@ CHƯA cố định tới đồng dạng; (3) đáp cần SUY-RA-tập-hợp / bi
 - Đường qua 2 điểm: { "op": "oxyz_line", "name": "d", "by": { "form": "two_points", "a": "A", "b": "B" } }
 - Mặt cầu tâm+bán kính: { "op": "oxyz_sphere", "name": "S", "by": { "form": "center_radius", "center": "I", "radius": 2 } }
 - Mặt cầu ngoại tiếp (qua 4 điểm): { "op": "oxyz_sphere", "name": "S", "by": { "form": "four_points", "a": "A", "b": "B", "c": "C", "d": "D" } }
+- Mặt cầu CHO BẰNG PHƯƠNG TRÌNH x²+y²+z²+ax+by+cz+d=0 (hệ số x²=1; đề cho dạng (x−1)²+(y+2)²+(z−4)²=20 thì KHAI TRIỂN ra a,b,c,d):
+  { "op": "oxyz_sphere", "name": "S", "by": { "form": "equation", "a": -2, "b": 4, "c": -8, "d": 1 } } → sphere_metric radius / equation (tâm đọc từ pt chuẩn tắc).
 - Trung điểm: { "op": "oxyz_midpoint", "name": "M", "a": "A", "b": "B" }
 - Điểm chia tỉ lệ (A + t·AB): { "op": "oxyz_ratio", "name": "G", "a": "A", "b": "B", "t": "1/3" }
 - Trọng tâm: { "op": "oxyz_centroid", "name": "G", "of": ["A", "B", "C"] }
@@ -117,6 +263,10 @@ CHƯA cố định tới đồng dạng; (3) đáp cần SUY-RA-tập-hợp / bi
 - Thể tích khối LĂNG TRỤ / hình HỘP / lập phương: { "kind": "volume", "solid": "prism", "base": ["A","B","C","D"], "top": ["A1","B1","C1","D1"] }
   base = đỉnh MẶT ĐÁY theo thứ tự vòng; top = đỉnh MẶT NẮP THEO ĐÚNG THỨ TỰ tương ứng (A1 trên A, B1 trên B...). Nắp = đáy tịnh tiến.
   DÙNG khối này cho MỌI hình hộp/lăng trụ — TUYỆT ĐỐI KHÔNG tự xẻ khối thành nhiều chóp rồi cộng (dễ sai).
+- Thể tích KHỐI ĐA DIỆN LỒI có các đỉnh cho trước (đề nói "khối đa diện lồi có các đỉnh là A,B,C,M,N,P", hoặc khối
+  KHÔNG có tên trong danh mục trên): { "kind": "volume", "solid": "convex_hull", "points": ["A","B","C","M","N","P"] }
+  — engine tự dựng các mặt của bao lồi và tính chính xác; KHÔNG xẻ khối, KHÔNG thay bằng chóp cụt (chỉ dùng
+  "pyramid_frustum" khi nắp thật sự là ảnh vị tự DƯƠNG của đáy). convex_hull dùng được cả trong volume_ratio.
 - Tỉ số thể tích: { "kind": "volume_ratio", "a": { "solid": "tetrahedron", "points": [...] }, "b": { "solid": "pyramid", "points": [...], "apex": "..." } }
 - Diện tích tam giác: { "kind": "area", "shape": "triangle", "points": ["A", "B", "C"] }
 - Diện tích ĐA GIÁC (thiết diện): { "kind": "area", "shape": "polygon", "points": [...các đỉnh theo THỨ TỰ vòng, ≥3] }
@@ -132,14 +282,24 @@ CHƯA cố định tới đồng dạng; (3) đáp cần SUY-RA-tập-hợp / bi
 - Đọc toạ độ MỘT điểm engine dựng: { "kind": "point_coord", "target": "F", "axis": "x" } (axis "x"|"y"|"z").
 - Giao: { "kind": "intersection", "a": "d", "b": "P" } — đường×mặt trả {result:"point", point};
   MẶT×MẶT trả {result:"line", line:{p,dir}} (đáp giao tuyến LÀ ĐƯỜNG). KHÔNG hỗ trợ đường×đường.
+- GỘP nhiều đại lượng thành MỘT đáp: { "kind": "combine", "op": "sum", "of": [ ...các query số... ] }
+  ("op": "sum" cộng, "diff" trừ dần từ query đầu). DÙNG khi khối đề hỏi KHÔNG có sẵn trong danh mục
+  trên: hãy xẻ nó thành các khối dựng được (tứ diện/chóp/lăng trụ) rồi GỘP LẠI bằng combine — đáp ra
+  MỘT số duy nhất. TUYỆT ĐỐI KHÔNG liệt kê các mảnh thành nhiều query rời (đề chỉ hỏi một số), và
+  cũng KHÔNG thay khối lạ bằng một khối gần giống (vd dùng chóp cụt cho khối có nắp bị xoay — sai).
+  Khối LỒI có đỉnh cho trước thì ƯU TIÊN "convex_hull" (ở trên) thay vì xẻ. combine gộp được cả đại lượng
+  DẠNG π (trụ/nón/cầu) và LỒNG NHAU được — "khối ghép" tròn xoay: trụ khoét rãnh = trụ − (trụ − trụ nhỏ), vd
+  { "kind":"combine","op":"diff","of":[ {trụ r=10,h=30}, { "kind":"combine","op":"diff","of":[ {trụ r=10,h=1}, {trụ r=9,h=1} ] } ] }.
 
-## NGUYÊN TẮC TOẠ-ĐỘ-HOÁ
+${PROVE_SECTION}## NGUYÊN TẮC TOẠ-ĐỘ-HOÁ
 - Đặt hình sao cho toạ độ đơn giản (số nguyên nếu được): một đỉnh ở gốc O(0,0,0); cạnh vuông góc theo các trục.
 - Ví dụ hình chóp có SA⊥đáy: đặt A tại gốc, đáy trong mặt z=0, S trên trục z.
 - Hình HỘP / LĂNG TRỤ ĐỨNG: đặt mặt đáy trong z=0, mặt nắp z=h (h = chiều cao); mỗi đỉnh nắp = đỉnh đáy cùng tên +h theo z. Hỏi thể tích ⇒ dùng query solid:"prism".
 - Toạ độ nhận số nguyên, chuỗi phân số ("3/2"), HOẶC chuỗi CĂN chính xác. KHÔNG dùng số thập phân vô hạn.
 - Với toạ độ VÔ TỈ (tam giác đều, góc 60°, đa giác đều...), BẮT BUỘC viết dạng căn chính xác bằng chuỗi:
   "sqrt(3)", "sqrt(3)/2", "2*sqrt(3)", "2*sqrt(3)/3" — TUYỆT ĐỐI KHÔNG viết 1.732 (sẽ mất đáp số căn đẹp).
+  Engine đọc được BIỂU THỨC đầy đủ, nên viết thoải mái: "sqrt(3)/2 - 1/2", "2/sqrt(3)", "(1+sqrt(5))/2",
+  "3*(2+sqrt(2))/4". Chỉ KHÔNG được chứa tên ẩn (vd "h") — mọi toạ độ phải là số cụ thể.
   Ví dụ tam giác đều cạnh 2 trong mặt z=0: A(0,0,0), B(2,0,0), đỉnh thứ ba C tại (1, "sqrt(3)", 0).
 - Khai báo đủ mọi điểm có tên trong đề. Thêm "edge" cho các cạnh của hình để vẽ.
 - Đưa mọi điều kiện đề cho vào "asserts" (để engine tự kiểm hình bạn đặt có đúng không).
@@ -335,7 +495,15 @@ tìm giá trị thoả: KHAI BÁO một tham số tự do và để engine giả
 - Tìm điều kiện: "analyze": { "kind":"solve", "parameter":"t",
     "constraint": { "of": <query trả số>, "equals": <giá trị> }, "report": <query muốn lấy đáp> }
 - Mặt cầu tựa 3 điểm (lệch t dọc trục): { "op":"oxyz_circumsphere_offset", "name":"S", "of":["A","B","C"], "t":"t" }
-- Đọc số của mặt cầu: { "kind":"sphere_metric", "target":"S", "what":"radius" | "top_z" | "bottom_z" }
+- Đọc số của mặt cầu: { "kind":"sphere_metric", "target":"S", "what":"radius" | "diameter" | "top_z" | "bottom_z" }
+- NÓN / TRỤ (cho trực tiếp bán kính đáy r & chiều cao h — KHÔNG cần dựng điểm; đáp ra dạng π/căn):
+  + Thể tích:     { "kind":"volume", "solid":"cone"|"cylinder", "r":<số/"sqrt(..)">, "h":<...> }
+  + Diện tích:    { "kind":"area", "shape":"cone"|"cylinder", "part":"lateral"|"total", "r":<...>, "h":<...> }  (lateral=xung quanh, total=toàn phần)
+  + Đường sinh nón: { "kind":"slant", "r":<...>, "h":<...> }   (l = √(r²+h²))
+- NÓN CỤT (bán kính hai đáy R>r, chiều cao h): { "kind":"volume", "solid":"cone_frustum", "R":<...>, "r":<...>, "h":<...> };
+  diện tích { "kind":"area", "shape":"cone_frustum", "part":"lateral"|"total", "R":<...>, "r":<...>, "h":<...> };
+  đường sinh { "kind":"slant", "R":<...>, "r":<...>, "h":<...> }  (l = √(h²+(R−r)²))
+- CHÓP CỤT (diện tích hai đáy S1, S2, chiều cao h): { "kind":"volume", "solid":"pyramid_frustum", "s1":<...>, "s2":<...>, "h":<...> }  (V = (1/3)h(S1+S2+√(S1·S2)))
 
 ## DỰNG HÌNH OXYZ (dựng cấu hình thoả ràng buộc → tính một ĐẠI LƯỢNG SỐ)
 Nhiều đề Oxyz KHÔNG cho sẵn mọi toạ độ mà mô tả một CẤU HÌNH phải DỰNG từ đối tượng cho trước
