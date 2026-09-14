@@ -23,6 +23,11 @@ export type AngleAnswer = {
   kind: 'angle';
   exactDegrees: number | null; // góc đẹp nếu nhận diện được
   degrees: number;
+  // Giá trị SỐ tương ứng với `text` (độ khi hiện độ; giá trị lượng giác khi hiện cos/sin exact).
+  // Mọi dạng đáp khác của engine đều có `approx`; tầng cầu nối (engineSolved) chỉ công nhận đáp có
+  // `approx` hữu hạn ⇒ thiếu trường này thì MỌI bài góc bị xếp "Mức 3 — chưa chứng thực" dù đã
+  // chứng nhận chính xác (45°, 60°…). Bổ sung để góc được đối xử như khoảng cách/thể tích.
+  approx: number;
   exactCos: Exact | null; // |cos| (đường-đường/nhị diện) hoặc |sin| (đường-mặt) đã chứng nhận
   text: string;
   approximate: boolean;
@@ -102,6 +107,7 @@ export function certifyAngle(metric: Scalar, floatMetric: number, complement: bo
     kind: 'angle',
     exactDegrees: niceDeg,
     degrees: niceDeg !== null ? niceDeg : angleValue,
+    approx: niceDeg !== null ? niceDeg : exactBroad ? (evM as number) : angleValue,
     exactCos: exactM,
     text,
     approximate: niceDeg === null && !exactBroad,

@@ -33,6 +33,9 @@ function problemTypeOf(plan) {
 function exactnessOf(result) {
   if ('parameter' in result) return 'numeric';
   const a = result.answers[0];
+  // Đáp GÓC không có field `exact` (mang exactDegrees/exactCos thay vào); chứng nhận chính xác khi
+  // approximate === false (góc đẹp hoặc giá trị lượng giác exact đã cross-check).
+  if (a && a.kind === 'angle') return a.approximate === false ? 'exact' : 'numeric';
   return a && a.exact != null && a.approximate === false ? 'exact' : 'numeric';
 }
 

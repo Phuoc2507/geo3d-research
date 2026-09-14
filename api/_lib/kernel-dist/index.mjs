@@ -5610,6 +5610,7 @@ function certifyAngle(metric, floatMetric, complement) {
     kind: "angle",
     exactDegrees: niceDeg,
     degrees: niceDeg !== null ? niceDeg : angleValue,
+    approx: niceDeg !== null ? niceDeg : exactBroad ? evM : angleValue,
     exactCos: exactM,
     text,
     approximate: niceDeg === null && !exactBroad
