@@ -322,6 +322,24 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     if (url.includes('aiplatform.googleapis.com') && vertexEffort && vertexEffort !== 'default') {
       body.reasoning_effort = vertexEffort;
     }
+    // Gateway OpenAI-compat TRUNG GIAN (khoá trong bảng llm_api_keys, vd api.xah.io) chuyển tiếp tới model
+    // có "thinking": không giới hạn suy luận ⇒ bước DỊCH (system prompt ~60k ký tự) hay quá 25s ⇒
+    // "Request timed out" ⇒ Mức 3 dù model mạnh (log problem_reports 10–14/9: 6/6 lỗi dịch là timeout
+    // ~50s). OPT-IN qua env LLM_REASONING_EFFORT_HOSTS="api.xah.io,host2" (+ LLM_REASONING_EFFORT, mặc định
+    // 'low'; reasoningEffort per-call vẫn ưu tiên). KHÔNG đặt env ⇒ body y như cũ. Chỉ gửi cho host được
+    // liệt kê vì gateway lạ có thể từ chối tham số không biết.
+    if (!('reasoning_effort' in body)) {
+      const extraHosts = String(process.env.LLM_REASONING_EFFORT_HOSTS || '')
+        .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+      if (extraHosts.length) {
+        let host = '';
+        try { host = new URL(url).host.toLowerCase(); } catch { /* url lạ → bỏ qua */ }
+        const extraEffort = callEffort || (process.env.LLM_REASONING_EFFORT || 'low').trim();
+        if (host && extraHosts.includes(host) && extraEffort && extraEffort !== 'default') {
+          body.reasoning_effort = extraEffort;
+        }
+      }
+    }
     return body;
   }
 

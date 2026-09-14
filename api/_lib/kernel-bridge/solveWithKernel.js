@@ -93,6 +93,7 @@ export async function planFromProblem(problem, options = {}) {
       timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
       apiKey: options.apiKey || null,
       json: true,
+      reasoningEffort: options.reasoningEffort || null, // dò thử giới hạn thinking qua gateway (scripts/eval/do-bo-dich.mjs)
     });
   } else if (options.provider === 'gemini') {
     const { callGemini } = await import('../gemini.js');
