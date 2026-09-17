@@ -233,6 +233,12 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     reasoningEffort = null, // ÉP mức suy luận PER-CALL ('none'|'low'|'medium'|'high') — ưu tiên hơn env
                             // dùng chung. Cho bước dịch Lý/Hóa ép 'low' (dịch máy móc, chống timeout) mà
                             // KHÔNG đổi reasoning của luồng Toán (Toán không truyền ⇒ giữ hành vi env).
+                            // Với gateway trung gian (không phải Google), CHỈ gửi khi per-call đặt hoặc host
+                            // nằm trong LLM_REASONING_EFFORT_HOSTS — nên bước VẼ (không truyền) giữ suy luận
+                            // bản địa, bước DỊCH (truyền 'low') được giới hạn. Gateway trả 400 vì không nhận
+                            // tham số ⇒ tự gửi lại KHÔNG tham số (xem sendWithKey).
+    overallCapMs = null,    // trần cho CẢ vòng thử các khoá (mặc định 52s). Route có deadline riêng truyền
+                            // ngân sách còn lại vào đây để vòng thử khoá kế không nuốt hết thời gian.
   } = options;
 
   // Chọn endpoint + khoá + model theo NGỮ CẢNH:
@@ -329,23 +335,32 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     // 'low'; reasoningEffort per-call vẫn ưu tiên). KHÔNG đặt env ⇒ body y như cũ. Chỉ gửi cho host được
     // liệt kê vì gateway lạ có thể từ chối tham số không biết.
     if (!('reasoning_effort' in body)) {
-      const extraHosts = String(process.env.LLM_REASONING_EFFORT_HOSTS || '')
-        .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
-      if (extraHosts.length) {
-        let host = '';
-        try { host = new URL(url).host.toLowerCase(); } catch { /* url lạ → bỏ qua */ }
-        const extraEffort = callEffort || (process.env.LLM_REASONING_EFFORT || 'low').trim();
-        if (host && extraHosts.includes(host) && extraEffort && extraEffort !== 'default') {
-          body.reasoning_effort = extraEffort;
-        }
+      let host = '';
+      try { host = new URL(url).host.toLowerCase(); } catch { /* url lạ → bỏ qua */ }
+      const isGoogle = host === 'generativelanguage.googleapis.com' || host.endsWith('aiplatform.googleapis.com');
+      if (!isGoogle) {
+        const extraHosts = String(process.env.LLM_REASONING_EFFORT_HOSTS || '')
+          .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+        // Per-call (bước dịch ép 'low') ⇒ gửi cho MỌI gateway; env host-list ⇒ gửi mức env cho host đó.
+        const hostListed = !!host && extraHosts.includes(host);
+        const effort = callEffort || (hostListed ? (process.env.LLM_REASONING_EFFORT || 'low').trim() : '');
+        if (effort && effort !== 'default') body.reasoning_effort = effort;
       }
     }
     return body;
   }
 
+  // Gateway KHÔNG nhận tham số reasoning_effort thường trả 400 kèm tên tham số / "unknown"/"unsupported".
+  // Chỉ coi là lỗi-tham-số khi body có gửi nó và text lỗi trỏ vào nó ⇒ gửi lại không tham số (1 lần).
+  function isReasoningParamRejected(statusCode, errText, bodyObj) {
+    if (statusCode !== 400 || !bodyObj || !('reasoning_effort' in bodyObj)) return false;
+    return /reasoning/i.test(errText || '') || /unknown (parameter|field|argument)|unrecognized|unsupported (parameter|field)|extra (fields|inputs)/i.test(errText || '');
+  }
+
   // Gửi 1 request bằng MỘT ứng viên (endpoint+model+khoá riêng), kèm retry nội bộ (network/5xx/empty).
   async function sendWithKey(cand, candTimeout) {
-    const bodyObj = buildBody(cand.model, cand.url);
+    let bodyObj = buildBody(cand.model, cand.url);
+    let retriedWithoutReasoning = false;
     // Kiểu auth cho host này: dùng lại kiểu đã biết chạy, mặc định 'bearer'. Sẽ tự đổi sang 'raw'
     // (key trần) nếu gateway từ chối Bearer bằng 401/403 (vd api.xah.io).
     let candHost = '';
@@ -384,6 +399,15 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
             authScheme = 'raw';
             triedRaw = true;
             console.warn('Auth "Bearer" bị từ chối, thử key trần cho host:', candHost || '(?)');
+            continue;
+          }
+
+          // Gateway từ chối tham số reasoning_effort ⇒ bỏ tham số, gửi lại NGAY (không tăng attempt).
+          if (!retriedWithoutReasoning && isReasoningParamRejected(response.statusCode, safeErrText, bodyObj)) {
+            retriedWithoutReasoning = true;
+            const { reasoning_effort: _dropped, ...rest } = bodyObj;
+            bodyObj = rest;
+            console.warn('Gateway không nhận reasoning_effort, gửi lại không tham số:', candHost || '(?)');
             continue;
           }
 
@@ -453,7 +477,8 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
   //     model kia có thể đang khoẻ. Bỏ qua ứng viên TRÙNG HỆT đích (cùng endpoint + model → vô ích).
   // Ngân sách CẢ vòng ≤ ~52s (chừa lằn maxDuration 60s của Vercel) để không bao giờ 504 vì thử quá nhiều.
   const targetSig = (c) => `${c.url}|${c.model}`;   // "đích" = endpoint + model
-  const OVERALL_CAP_MS = Math.min(52000, Math.max(timeoutMs, (timeoutMs || 0) + 22000));
+  const hardCap = Number.isFinite(Number(overallCapMs)) && Number(overallCapMs) > 0 ? Number(overallCapMs) : 52000;
+  const OVERALL_CAP_MS = Math.min(hardCap, Math.max(timeoutMs, (timeoutMs || 0) + 22000));
   const MIN_ATTEMPT_MS = 6000;
   const startAll = Date.now();
   let lastError = null;

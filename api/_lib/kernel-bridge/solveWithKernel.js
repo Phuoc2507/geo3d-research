@@ -57,6 +57,13 @@ const TRANSLATOR_MODEL = process.env.VILAO_TRANSLATOR_MODEL || 'ts/gemini-3.1-fl
 // một lần LLM treo sẽ bắt người dùng chờ 3 phút trước khi luồng cũ mới bắt đầu.
 const TRANSLATE_TIMEOUT_MS = Number(process.env.VILAO_TRANSLATOR_TIMEOUT_MS) || 25000;
 
+// Mức suy luận mặc định cho bước dịch: 'low'. env TRANSLATOR_REASONING_EFFORT đổi được; 'default'/'' ⇒
+// null (không gửi tham số, model dùng mức bản địa).
+export function translatorReasoningEffort() {
+  const v = (process.env.TRANSLATOR_REASONING_EFFORT ?? 'low').trim();
+  return v && v !== 'default' ? v : null;
+}
+
 export async function planFromProblem(problem, options = {}) {
   // `options.systemPrompt` cho phép caller (vd bộ tối ưu prompt tiến hoá) thử một prompt ỨNG VIÊN
   // khác mà KHÔNG đụng đường sản xuất. Mặc định giữ nguyên TRANSLATOR_PROMPT ⇒ hành vi cũ không đổi.
@@ -109,7 +116,15 @@ export async function planFromProblem(problem, options = {}) {
       model: options.model || TRANSLATOR_MODEL,
       maxTokens,
       timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,
+      overallCapMs: options.overallCapMs ?? null,
       apiKey: options.apiKey || null,
+      baseUrl: options.baseUrl || null,     // (chỉ khi có apiKey) đè endpoint — cho nút đo bước dịch ở admin
+      maxAttempts: options.maxAttempts ?? 2,
+      // Bước DỊCH là việc máy móc (đề → Plan JSON theo schema) ⇒ suy luận sâu chỉ tốn thời gian: log
+      // 10–16/9 cho thấy model có thinking qua gateway trung gian mất >25s ⇒ "Request timed out". Ép
+      // 'low' MẶC ĐỊNH (đổi qua env TRANSLATOR_REASONING_EFFORT; 'default' = không gửi). Per-call
+      // options.reasoningEffort (nút đo ở admin / eval) vẫn ưu tiên. Không đụng bước VẼ.
+      reasoningEffort: options.reasoningEffort !== undefined ? options.reasoningEffort : translatorReasoningEffort(),
     });
   }
   let json;
