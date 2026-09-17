@@ -127,6 +127,8 @@ export async function planFromProblem(problem, options = {}) {
       reasoningEffort: options.reasoningEffort !== undefined ? options.reasoningEffort : translatorReasoningEffort(),
     });
   }
+  // Engine bóng cần NGUYÊN VĂN output kể cả khi dịch thành công (để soi vì sao/đã hiểu đề thành gì).
+  if (typeof options.onRaw === 'function') { try { options.onRaw(raw); } catch { /* không chặn */ } }
   let json;
   try {
     json = parseJsonLoose(extractJson(raw));
