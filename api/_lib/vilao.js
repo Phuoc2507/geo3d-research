@@ -239,6 +239,10 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
                             // tham số ⇒ tự gửi lại KHÔNG tham số (xem sendWithKey).
     overallCapMs = null,    // trần cho CẢ vòng thử các khoá (mặc định 52s). Route có deadline riêng truyền
                             // ngân sách còn lại vào đây để vòng thử khoá kế không nuốt hết thời gian.
+    googleDefaultEffort = null, // Mức suy luận cho endpoint GEMINI TRỰC TIẾP khi caller KHÔNG ép per-call và
+                            // env GEMINI_REASONING_EFFORT KHÔNG đặt (mặc định toàn cục là 'low'). Bước VẼ truyền
+                            // 'medium': trên Gemini 3.8 Flash 'low' gần như không suy nghĩ. Không đụng gateway
+                            // trung gian (không phải Google) — ở đó vẫn không gửi tham số.
   } = options;
 
   // Chọn endpoint + khoá + model theo NGỮ CẢNH:
@@ -320,7 +324,9 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     }
     // reasoning_effort CHỈ cho endpoint Google (Gemini AI Studio / Vertex). reasoningEffort per-call > env.
     const callEffort = (reasoningEffort || '').trim();
-    const geminiEffort = callEffort || (process.env.GEMINI_REASONING_EFFORT ?? 'low').trim();
+    // Ưu tiên: per-call > env GEMINI_REASONING_EFFORT (đặt tường minh) > googleDefaultEffort của caller > 'low'.
+    const envGeminiEffort = (process.env.GEMINI_REASONING_EFFORT ?? '').trim();
+    const geminiEffort = callEffort || envGeminiEffort || (googleDefaultEffort || '').trim() || 'low';
     if (url.includes('generativelanguage.googleapis.com') && geminiEffort && geminiEffort !== 'default') {
       body.reasoning_effort = geminiEffort;
     }
