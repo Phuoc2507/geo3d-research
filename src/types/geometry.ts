@@ -222,7 +222,7 @@ export interface AdvanceStep {
   /** Lời giải từng bước cho câu này (B2 backend nạp). import type: bị erase, không tạo vòng lặp runtime. */
   solution?: import('@/hooks/useSolver').SolveResult;
   anim?: {
-    param: 'sweep' | 'angle' | 'slab' | 'reveal';
+    param: 'sweep' | 'angle' | 'slab' | 'reveal' | 'drill';
     label: string;   // nhãn hiển thị cạnh thanh kéo, ví dụ "Quét tròn xoay"
     tMax: number;    // giá trị vật lý ứng với t=1 (Đợt 1: bằng b của domain)
     autoplay?: boolean;
@@ -324,6 +324,10 @@ export interface RevolutionSolid extends AdvanceFlags {
   // Mẫu biên dạng do engine tính sẵn ⇒ frontend dựng LatheGeometry mà KHÔNG cần parser biểu thức.
   samples?: { x: number; r: number }[];
   innerSamples?: { x: number; r: number }[];
+  /** KHOAN LỖ dọc trục (bước anim 'drill'): khối vành khăn này được lộ bằng mũi khoan trụ bán kính
+   *  holeRadius đi dọc trục; advanceT = tiến trình khoan (0 = chưa khoan, 1 = đã xuyên & rút mũi). */
+  drill?: boolean;
+  holeRadius?: number;
 }
 
 // ── Calculus Đợt 2: thiết diện đã biết & diện tích hình phẳng ──────
