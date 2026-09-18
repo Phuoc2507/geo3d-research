@@ -178,7 +178,8 @@ export interface AnimationTrack {
   end: number;   // time in seconds
   // 4 KÊNH trực giao (xem lib/geometry/motion.ts): move = vị trí, scale = to/nhỏ dần, spin = xoay,
   // fade = mờ dần. water_level / translate / parametric_path / fold giữ cho hình cũ.
-  type: 'move' | 'scale' | 'spin' | 'fade' | 'water_level' | 'translate' | 'parametric_path' | 'fold';
+  // 'sweep' / 'drill': dành riêng cho khối tròn xoay (targetId = id của revolutionSolids).
+  type: 'move' | 'scale' | 'spin' | 'fade' | 'sweep' | 'drill' | 'water_level' | 'translate' | 'parametric_path' | 'fold';
   /** id vật được animate: id của point, agent hoặc prop trong cùng hình. */
   targetId?: string;
   params: {
