@@ -211,6 +211,14 @@ export interface AnimationTrack {
     to?: [number, number, number] | number;
     /** scale: cỡ đầu → cỡ cuối (nhân với cỡ gốc). spin: số vòng quay. */
     turns?: number;
+    /** spin: trục quay geo3d. 'z' (mặc định) = trục đứng; 'x'/'y' = trục ngang (thang trượt, bánh xe, đu quay). */
+    axis?: 'x' | 'y' | 'z';
+    /** move theo CUNG TRÒN: tâm + bán kính + mặt phẳng chứa đường tròn + khoảng góc (độ). */
+    center?: [number, number, number];
+    radius?: number;
+    plane?: 'xy' | 'xz' | 'yz';
+    fromDeg?: number;
+    toDeg?: number;
     /** false ⇒ vật KHÔNG tự quay mặt theo hướng đi. */
     faceHeading?: boolean;
     easing?: 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
