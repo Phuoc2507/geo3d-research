@@ -176,12 +176,8 @@ export interface AnimationTrack {
   id: string;
   start: number; // time in seconds
   end: number;   // time in seconds
-  // 4 KÊNH trực giao (xem lib/geometry/motion.ts): move = vị trí, scale = to/nhỏ dần, spin = xoay,
-  // fade = mờ dần. water_level / translate / parametric_path / fold giữ cho hình cũ.
-  // 'sweep' / 'drill': dành riêng cho khối tròn xoay (targetId = id của revolutionSolids).
-  type: 'move' | 'scale' | 'spin' | 'fade' | 'sweep' | 'drill' | 'water_level' | 'translate' | 'parametric_path' | 'fold';
-  /** id vật được animate: id của point, agent hoặc prop trong cùng hình. */
-  targetId?: string;
+  type: 'water_level' | 'translate' | 'parametric_path' | 'fold' | 'fade';
+  targetId?: string; // which object to animate (e.g., 'tent', 'rescuer', 'victim')
   params: {
     displacement_function?: string;
     D?: string;
@@ -205,23 +201,6 @@ export interface AnimationTrack {
     opacityEnd?: number;
     angleStart?: number;
     angleEnd?: number;
-    /** move: các mốc đường đi [x,y,z] (geo3d z-up), đi đều theo độ dài. */
-    waypoints?: [number, number, number][];
-    from?: [number, number, number] | number;
-    to?: [number, number, number] | number;
-    /** scale: cỡ đầu → cỡ cuối (nhân với cỡ gốc). spin: số vòng quay. */
-    turns?: number;
-    /** spin: trục quay geo3d. 'z' (mặc định) = trục đứng; 'x'/'y' = trục ngang (thang trượt, bánh xe, đu quay). */
-    axis?: 'x' | 'y' | 'z';
-    /** move theo CUNG TRÒN: tâm + bán kính + mặt phẳng chứa đường tròn + khoảng góc (độ). */
-    center?: [number, number, number];
-    radius?: number;
-    plane?: 'xy' | 'xz' | 'yz';
-    fromDeg?: number;
-    toDeg?: number;
-    /** false ⇒ vật KHÔNG tự quay mặt theo hướng đi. */
-    faceHeading?: boolean;
-    easing?: 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
     [key: string]: unknown;
   };
 }
@@ -243,7 +222,7 @@ export interface AdvanceStep {
   /** Lời giải từng bước cho câu này (B2 backend nạp). import type: bị erase, không tạo vòng lặp runtime. */
   solution?: import('@/hooks/useSolver').SolveResult;
   anim?: {
-    param: 'sweep' | 'angle' | 'slab' | 'reveal' | 'drill';
+    param: 'sweep' | 'angle' | 'slab' | 'reveal';
     label: string;   // nhãn hiển thị cạnh thanh kéo, ví dụ "Quét tròn xoay"
     tMax: number;    // giá trị vật lý ứng với t=1 (Đợt 1: bằng b của domain)
     autoplay?: boolean;
@@ -261,12 +240,6 @@ export interface Agent3D {
   initialPosition: [number, number, number];
   color: string;
   radius?: number;
-  /** Vẽ bằng MÔ HÌNH vật thật thay cho quả cầu (người đi bộ, máy bay bay…). */
-  kind?: RealWorldProp['kind'];
-  /** Cỡ mô hình theo đơn vị hình (chỉ khi có `kind`). */
-  size?: number;
-  /** Hướng ban đầu (độ) khi vật chưa chuyển động. */
-  rotationY?: number;
 }
 
 /**
@@ -289,8 +262,6 @@ export interface RealWorldProp {
   size?: number;
   /** Màu thân chính (hex). Mặc định tuỳ loại. */
   color?: string;
-  /** Nhãn hiện cạnh vật khi nó là NHÂN VẬT của đề (người đi bộ, máy bay…), không chỉ trang trí. */
-  label?: string;
 }
 
 export interface Curve3D extends AdvanceFlags {
@@ -353,10 +324,6 @@ export interface RevolutionSolid extends AdvanceFlags {
   // Mẫu biên dạng do engine tính sẵn ⇒ frontend dựng LatheGeometry mà KHÔNG cần parser biểu thức.
   samples?: { x: number; r: number }[];
   innerSamples?: { x: number; r: number }[];
-  /** KHOAN LỖ dọc trục (bước anim 'drill'): khối vành khăn này được lộ bằng mũi khoan trụ bán kính
-   *  holeRadius đi dọc trục; advanceT = tiến trình khoan (0 = chưa khoan, 1 = đã xuyên & rút mũi). */
-  drill?: boolean;
-  holeRadius?: number;
 }
 
 // ── Calculus Đợt 2: thiết diện đã biết & diện tích hình phẳng ──────
