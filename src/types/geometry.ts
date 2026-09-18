@@ -176,8 +176,11 @@ export interface AnimationTrack {
   id: string;
   start: number; // time in seconds
   end: number;   // time in seconds
-  type: 'water_level' | 'translate' | 'parametric_path' | 'fold' | 'fade';
-  targetId?: string; // which object to animate (e.g., 'tent', 'rescuer', 'victim')
+  // 4 KÊNH trực giao (xem lib/geometry/motion.ts): move = vị trí, scale = to/nhỏ dần, spin = xoay,
+  // fade = mờ dần. water_level / translate / parametric_path / fold giữ cho hình cũ.
+  type: 'move' | 'scale' | 'spin' | 'fade' | 'water_level' | 'translate' | 'parametric_path' | 'fold';
+  /** id vật được animate: id của point, agent hoặc prop trong cùng hình. */
+  targetId?: string;
   params: {
     displacement_function?: string;
     D?: string;
@@ -201,6 +204,15 @@ export interface AnimationTrack {
     opacityEnd?: number;
     angleStart?: number;
     angleEnd?: number;
+    /** move: các mốc đường đi [x,y,z] (geo3d z-up), đi đều theo độ dài. */
+    waypoints?: [number, number, number][];
+    from?: [number, number, number] | number;
+    to?: [number, number, number] | number;
+    /** scale: cỡ đầu → cỡ cuối (nhân với cỡ gốc). spin: số vòng quay. */
+    turns?: number;
+    /** false ⇒ vật KHÔNG tự quay mặt theo hướng đi. */
+    faceHeading?: boolean;
+    easing?: 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
     [key: string]: unknown;
   };
 }
@@ -240,6 +252,12 @@ export interface Agent3D {
   initialPosition: [number, number, number];
   color: string;
   radius?: number;
+  /** Vẽ bằng MÔ HÌNH vật thật thay cho quả cầu (người đi bộ, máy bay bay…). */
+  kind?: RealWorldProp['kind'];
+  /** Cỡ mô hình theo đơn vị hình (chỉ khi có `kind`). */
+  size?: number;
+  /** Hướng ban đầu (độ) khi vật chưa chuyển động. */
+  rotationY?: number;
 }
 
 /**
@@ -262,6 +280,8 @@ export interface RealWorldProp {
   size?: number;
   /** Màu thân chính (hex). Mặc định tuỳ loại. */
   color?: string;
+  /** Nhãn hiện cạnh vật khi nó là NHÂN VẬT của đề (người đi bộ, máy bay…), không chỉ trang trí. */
+  label?: string;
 }
 
 export interface Curve3D extends AdvanceFlags {
