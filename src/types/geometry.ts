@@ -330,6 +330,11 @@ export interface RevolutionSolid extends AdvanceFlags {
   // Mẫu biên dạng do engine tính sẵn ⇒ frontend dựng LatheGeometry mà KHÔNG cần parser biểu thức.
   samples?: { x: number; r: number }[];
   innerSamples?: { x: number; r: number }[];
+  /** Khoan lỗ (cảnh Advance do engine dựng): bán kính lỗ trụ dọc trục. Lịch motion (Vẽ kỹ) dùng
+   *  `motion.revolution[].drill.radius` thay vì trường này. */
+  holeRadius?: number;
+  /** true ⇒ cảnh Advance chạy animation khoan theo advanceT (khối hiện trọn, mũi khoan đi dọc trục). */
+  drill?: boolean;
 }
 
 // ── Calculus Đợt 2: thiết diện đã biết & diện tích hình phẳng ──────
