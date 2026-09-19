@@ -138,6 +138,8 @@ export interface DynamicPoint {
   from: string;       // Point ID — start of segment
   to: string;         // Point ID — end of segment
   k: number;          // 0..1 ratio AM/AB
+  /** Chuyển động: điểm này giữ CÙNG tỉ lệ k với dynamicPoint khác (id) khi điểm đó chạy. */
+  kOf?: string;
   color?: string;
 }
 
@@ -262,6 +264,10 @@ export interface RealWorldProp {
   size?: number;
   /** Màu thân chính (hex). Mặc định tuỳ loại. */
   color?: string;
+  /** Chuyển động: id điểm NEO (vị trí hiện thời của vật). Prop đi ⇒ điểm đi; điểm đi ⇒ prop đi. */
+  at?: string;
+  /** Nhãn hiển thị cạnh vật (tuỳ chọn). */
+  label?: string;
 }
 
 export interface Curve3D extends AdvanceFlags {
@@ -411,6 +417,11 @@ export interface GeometryData {
    *  hiện tại KHỚP giá trị này (chống dùng đáp cũ cho câu hỏi đã bị sửa trên cùng một hình). */
   engineProblem?: string;
   timeline?: AnimationTimeline;
+  /** Ý định chuyển động THÔ do LLM trả (Vẽ kỹ). Frontend không đọc; giữ để debug/cache. */
+  motions?: unknown[];
+  clock?: { unit?: string; start?: string };
+  /** Chuyển động đã biên dịch (server). Xem src/types/motion.ts. */
+  motion?: import('./motion').CompiledMotion;
   agents?: Agent3D[];
   /** Vật thể thực tế minh hoạ bối cảnh (xe/người/nhà/du thuyền…). Thuần trang trí. */
   props?: RealWorldProp[];
