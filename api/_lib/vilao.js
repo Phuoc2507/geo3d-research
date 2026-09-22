@@ -32,6 +32,23 @@ const PROVIDERS = {
   },
 };
 
+// NGHỈ TẠM ứng viên vừa lỗi KHOÁ (401/402/403/429): khoá hết tiền/bị thu hồi thì lượt sau vẫn hỏng y hệt,
+// mà mỗi lần thử lại tốn tới cả ngân sách (gateway trả lỗi chậm) ⇒ nhớ theo (khoá+endpoint+model) trong
+// KEY_COOLDOWN_MS, các lượt sau XẾP ứng viên đó xuống cuối (không bỏ hẳn: nếu mọi ứng viên đều nghỉ thì vẫn
+// thử theo thứ tự cũ). In-memory theo tiến trình — Vercel giữ ấm nên đủ dùng; nguội thì thử lại, vô hại.
+const KEY_COOLDOWN_MS = 5 * 60 * 1000;
+const KEY_COOLDOWN = new Map();   // sig "khoá|url|model" → mốc hết nghỉ (ms)
+export function candidateSig(c) { return `${c.apiKey}|${c.url}|${c.model}`; }
+export function markKeyCooldown(c, now = Date.now()) { KEY_COOLDOWN.set(candidateSig(c), now + KEY_COOLDOWN_MS); }
+export function isCoolingDown(c, now = Date.now()) { const t = KEY_COOLDOWN.get(candidateSig(c)); return !!t && t > now; }
+export function _resetKeyCooldowns() { KEY_COOLDOWN.clear(); }
+/** Ứng viên đang nghỉ xếp xuống cuối, giữ nguyên thứ tự tương đối trong mỗi nhóm. */
+export function orderByCooldown(list, now = Date.now()) {
+  const hot = [], cold = [];
+  for (const c of list) (isCoolingDown(c, now) ? cold : hot).push(c);
+  return hot.length ? [...hot, ...cold] : list;
+}
+
 // Nhớ KIỂU AUTH đã dùng được cho từng host gateway (in-memory, theo tiến trình).
 //   'bearer' = header "Authorization: Bearer <key>" (vilao, gemini, đa số).
 //   'raw'    = header "Authorization: <key>" (một số gateway như api.xah.io nhận key TRẦN).
@@ -209,9 +226,10 @@ export function resolveApiKeyCandidates(apiKeyEnv, env = process.env) {
 export function isKeyError(err) {
   if (!err) return false;
   const code = Number(err.statusCode);
-  if (code === 401 || code === 403 || code === 429) return true;
+  // 402 = hết tiền / "giá model đã đổi, vào dashboard chấp nhận" (gateway xah.io) — cũng là lỗi KHOÁ/tài khoản.
+  if (code === 401 || code === 402 || code === 403 || code === 429) return true;
   const msg = (err.message || '').toLowerCase();
-  if (/\b(401|403|429)\b/.test(msg)) return true;
+  if (/\b(401|402|403|429)\b/.test(msg)) return true;
   return /unauthorized|forbidden|invalid api key|quota|rate limit|insufficient_quota|exceeded your/.test(msg);
 }
 
@@ -279,10 +297,16 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
       candidates = [];
       for (const c of [...dbPool, ...envKeys]) {
         const ak = String(c.apiKey || '').trim();
-        if (!ak || seen.has(ak)) continue;                                     // khử trùng theo giá trị khoá
-        seen.add(ak);
-        candidates.push({ apiKey: ak, url: c.url || defaultUrl, model: c.model || defaultModel });
+        if (!ak) continue;
+        const cand = { apiKey: ak, url: c.url || defaultUrl, model: c.model || defaultModel };
+        // Khử trùng theo (khoá, endpoint, model): CÙNG một khoá trỏ nhiều model khác nhau là nhiều ứng viên
+        // dự phòng thật sự (khoá xah.io dùng chung cho gemini-flash-3.8 / 3.7…) — trước đây bị gộp mất.
+        const sig = candidateSig(cand);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        candidates.push(cand);
       }
+      candidates = orderByCooldown(candidates);
     }
     if (!candidates.length) {
       throw new Error(`Thiếu API key cho provider '${process.env.LLM_PROVIDER || 'vilao'}' (đặt ${prov.apiKeyEnv})`);
@@ -498,6 +522,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
       return await sendWithKey(cand, candTimeout);
     } catch (err) {
       lastError = err;
+      if (isKeyError(err) && !apiKey) markKeyCooldown(cand);   // khoá tường minh (tab test) không nghỉ
       const nextKi = isKeyError(err)
         ? ki + 1                                                     // lỗi khoá → khoá kế (bất kể đích)
         : candidates.findIndex((c, idx) => idx > ki && targetSig(c) !== targetSig(cand));  // khác đích
