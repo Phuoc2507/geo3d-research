@@ -113,6 +113,7 @@ export async function planFromProblem(problem, options = {}) {
     });
   } else {
     raw = await callVilao(systemPrompt, userText, {
+      usageTag: 'translate',
       model: options.model || TRANSLATOR_MODEL,
       maxTokens,
       timeoutMs: options.timeoutMs ?? TRANSLATE_TIMEOUT_MS,

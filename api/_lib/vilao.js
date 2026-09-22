@@ -1,4 +1,5 @@
 import https from 'https';
+import { recordLlmUsage } from './llmUsage.js';
 import { ensureVertexAccessToken } from './vertexAuth.js';
 import { getActiveKeyPool } from './llmKeyStore.js';
 import { redactSecrets } from './urlGuard.js';
@@ -248,6 +249,8 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     maxAttempts = 2,   // số lần thử tối đa (kể cả retry nội bộ khi lỗi mạng/timeout). Đặt 1 khi caller
                        // đã tự hedge (chạy song song) để khỏi chồng retry gây phí token.
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
+    usageTag = 'other',   // nhãn tính năng ghi vào llm_usage ('draw'|'translate'|'solve'|'modify'|'ocr'|…) — để biết tính năng nào tốn token.
+    usageUserId = null,   // user_id ghi kèm (null = khách) — để biết ai tốn token.
     onModel = null,    // (m) => void: báo TÊN MODEL THẬT đang thử cho mỗi ứng viên (để route ghi vào bài lỗi
                        // "dùng model nào"). Gọi trước mỗi lượt ⇒ khi lỗi, giữ đúng model vừa thất bại.
     reasoningEffort = null, // ÉP mức suy luận PER-CALL ('none'|'low'|'medium'|'high') — ưu tiên hơn env
@@ -403,6 +406,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     while (attempt < maxAttempts) {
       try {
         const bodyData = JSON.stringify(bodyObj);
+        const sentAt = Date.now();
         const requestOptions = {
           method: 'POST',
           headers: {
@@ -452,6 +456,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
 
           const apiErr = new Error("Vilao API error: " + response.statusCode + " " + safeErrText);
           apiErr.statusCode = response.statusCode;   // để isKeyError phân biệt lỗi khoá (401/403/429)
+          recordLlmUsage({ host: candHost, model: cand.model, tag: usageTag, userId: usageUserId, ok: false, statusCode: response.statusCode, durationMs: Date.now() - sentAt, usage: null });
           throw apiErr;
         }
 
@@ -484,6 +489,8 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
           }
           throw new Error('Vilao returned empty content');
         }
+        // Ghi token + chi phí (fire-and-forget; withSentry flush sau khi route xong).
+        recordLlmUsage({ host: candHost, model: cand.model, tag: usageTag, userId: usageUserId, ok: true, statusCode: response.statusCode, durationMs: Date.now() - sentAt, usage: data.usage || null });
         if (returnRaw) {
           return { content: data.choices[0].message.content, usage: data.usage || null, model: cand.model };
         }
