@@ -35,6 +35,7 @@ Open [http://localhost:8080](http://localhost:8080) with your browser to see the
 
 ## Scripts
 - `npm run dev`: Start the local development server (Vite)
-- `npm run build`: Build the app for production
+- `npm run build`: Build the app for production (kernel + Vite + prerender các trang công khai, xem `docs/seo.md`)
+- `npm run prerender`: Chỉ chạy lại bước render tĩnh (cần `dist/` từ `vite build` trước)
 - `npm run lint`: Run ESLint on the source files
 - `npm run preview`: Preview the production build locally

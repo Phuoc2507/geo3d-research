@@ -248,6 +248,8 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     maxAttempts = 2,   // số lần thử tối đa (kể cả retry nội bộ khi lỗi mạng/timeout). Đặt 1 khi caller
                        // đã tự hedge (chạy song song) để khỏi chồng retry gây phí token.
     returnRaw = false, // true → trả { content, usage, model } (cho tab Test API Key: cần token). Mặc định giữ nguyên (trả content).
+    onModel = null,    // (m) => void: báo TÊN MODEL THẬT đang thử cho mỗi ứng viên (để route ghi vào bài lỗi
+                       // "dùng model nào"). Gọi trước mỗi lượt ⇒ khi lỗi, giữ đúng model vừa thất bại.
     reasoningEffort = null, // ÉP mức suy luận PER-CALL ('none'|'low'|'medium'|'high') — ưu tiên hơn env
                             // dùng chung. Cho bước dịch Lý/Hóa ép 'low' (dịch máy móc, chống timeout) mà
                             // KHÔNG đổi reasoning của luồng Toán (Toán không truyền ⇒ giữ hành vi env).
@@ -518,6 +520,7 @@ export async function callVilao(systemPrompt, userPrompt, options = {}) {
     const remaining = OVERALL_CAP_MS - (Date.now() - startAll);
     if (ki > 0 && remaining < MIN_ATTEMPT_MS) break;                 // hết ngân sách cho ứng viên sau
     const candTimeout = ki === 0 ? timeoutMs : Math.min(timeoutMs, remaining);
+    if (onModel) { try { onModel(cand.model); } catch { /* callback không được làm hỏng luồng LLM */ } }
     try {
       return await sendWithKey(cand, candTimeout);
     } catch (err) {
