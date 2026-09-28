@@ -77,6 +77,19 @@ VERTEX_SA_KEY=/duong/dan/sa.json VERTEX_PROJECT=<project> \
 
 ---
 
+## Phạm vi của bản công khai này
+
+- Repo này là **phần nghiên cứu** tách khỏi ứng dụng thương mại: engine ký hiệu, bộ dữ liệu
+  chuẩn, quy trình đánh giá, cổng từ chối và tài liệu. **Tra nhanh câu hỏi giám khảo:**
+  [`docs/nghien-cuu/CAU-HOI-GIAM-KHAO.md`](docs/nghien-cuu/CAU-HOI-GIAM-KHAO.md).
+- **Engine chứng minh quan hệ** (kiểm mệnh đề đúng/sai bằng đa thể hiện ngẫu nhiên —
+  Schwartz–Zippel) hiện đặt sau cổng `PROVE_MODE` trong bản phát triển và **sẽ được bổ sung
+  vào repo này sau kỳ thi**. Nếu hỏi riêng phần này, code chưa có trong bản công khai hiện tại.
+- **Toàn văn 116 câu đề thi thật không được đăng** để tôn trọng bản quyền; repo chỉ giữ **bảng
+  nguồn** (kỳ thi–năm–mã đề) và **kết quả đo** (xem `docs/nghien-cuu/du-lieu-benchmark.md`).
+- **Lịch sử phát triển** phần nghiên cứu nằm trong lịch sử git (đã lọc chỉ giữ đường dẫn nghiên
+  cứu và tẩy sạch mọi khoá API). Nhật ký mốc sự kiện: `docs/nghien-cuu/nhat-ky-moc-su-kien.md`.
+
 ## Liêm chính & ghi công (minh bạch)
 
 Dự án có **sử dụng trợ lý lập trình AI để hiện thực phần mã nguồn**, dưới sự chỉ đạo, kiểm thử và

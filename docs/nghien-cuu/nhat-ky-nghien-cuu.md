@@ -1,3 +1,10 @@
+> **Nhật ký ĐÃ ĐIỀN (bằng chứng quá trình) nằm ở:**
+> - `nhat-ky-moc-su-kien.md` — 23 mốc sự kiện thật, ngày lấy từ dấu thời gian commit git.
+> - `nhat-ky-nghien-cuu.docx` — bản đầy đủ 6 mục cho mốc 1–15 (nguồn để chép tay Phụ lục 2).
+> - `nhat-ky-cau-lenh.docx` — nhật ký câu lệnh phần AI hỗ trợ code (Phụ lục 1).
+>
+> *File dưới đây là **mẫu trống** để nhóm điền thêm khi cần.*
+
 # Nhật ký nghiên cứu — GeometryPro (mẫu để nhóm điền)
 
 > Mục đích: làm **bằng chứng quá trình** cho khâu hậu kiểm — chứng minh hai em thật sự
