@@ -1,0 +1,9 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Ground-truth sinh ra từ engine TS (tái tạo bằng: node golden_run_all.mjs / node_analysis.mjs ...)
+golden_ts.json
+golden_all_ts.json
+analysis_ts.json
+parity_ts.json
